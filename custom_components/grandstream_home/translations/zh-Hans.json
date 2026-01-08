@@ -1,0 +1,146 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "添加 Grandstream 设备",
+        "description": "请输入您的设备信息",
+        "data": {
+          "host": "IP地址",
+          "name": "设备名称",
+          "device_type": "设备类型"
+        },
+        "data_description": {
+          "device_type": "选择设备类型: GDS (门禁设备) 或 GNS (网络存储)"
+        }
+      },
+      "auth": {
+        "title": "设备认证",
+        "description": "请输入 {host} 的认证信息\n设备类型: {device_type}\n默认用户名: {username}",
+        "data": {
+          "username": "用户名",
+          "password": "管理员密码",
+          "port": "端口",
+          "rtsp_enable": "启用RTSP",
+          "rtsp_username": "RTSP用户名",
+          "rtsp_password": "RTSP密码"
+        },
+        "data_description": {
+          "username": "设备登录用户名",
+          "password": "设备管理员密码",
+          "rtsp_enable": "是否启用RTSP视频流",
+          "rtsp_username": "RTSP认证用户名 (可选)",
+          "rtsp_password": "RTSP认证密码 (可选)"
+        }
+      },
+      "confirm": {
+        "title": "确认添加设备",
+        "description": "您要将 {name} 添加到 Home Assistant 吗？"
+      }
+    },
+    "error": {
+      "cannot_connect": "连接失败",
+      "invalid_auth": "认证失败",
+      "unknown": "未知错误",
+      "missing_rtsp_credentials": "启用RTSP时需要提供用户名和密码"
+    },
+    "abort": {
+      "already_configured": "设备已配置"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "personnel_intrusion": "人员滞留/入侵报警",
+      "hostage": "胁迫报警",
+      "tamper": "防拆报警",
+      "keypad_error": "键盘输入错误报警",
+      "non_scheduled_access": "非计划访问报警",
+      "unauthorized_rfid": "未授权RFID卡访问报警",
+      "abnormal_sound": "异常声音报警",
+      "high_temperature": "高温报警",
+      "di_1": "DI 1",
+      "di_2": "DI 2",
+      "di_3": "DI 3",
+      "disk_error": "磁盘错误/故障",
+      "disk_offline": "磁盘离线",
+      "pool_degraded": "存储池降级",
+      "pool_full": "存储池已满",
+      "fan_abnormal": "风扇状态异常",
+      "system_high_temp": "系统温度过高",
+      "cpu_high_usage": "CPU使用率过高",
+      "memory_high_usage": "内存使用率过高",
+      "cpu_usage_above": "CPU使用率超过阈值",
+      "memory_usage_above": "内存使用率超过阈值",
+      "system_temperature_above": "系统温度超过阈值",
+      "cpu_temperature_above": "CPU温度超过阈值",
+      "disk_temperature_above": "磁盘温度超过阈值",
+      "pool_usage_above": "存储池使用率超过阈值",
+      "disk_abnormal": "磁盘状态异常",
+      "pool_abnormal": "存储池状态异常"
+    },
+    "action_type": {
+      "reboot_device": "设备重启",
+      "sleep_device": "设备休眠",
+      "wake_device": "设备唤醒",
+      "shutdown_device": "设备关机"
+    },
+    "condition_type": {
+      "cpu_usage_above": "CPU使用率超过阈值",
+      "memory_usage_above": "内存使用率超过阈值",
+      "disk_temperature_above": "磁盘温度超过阈值",
+      "cpu_temperature_above": "CPU温度超过阈值",
+      "system_temperature_above": "系统温度超过阈值",
+      "pool_usage_above": "存储池使用率超过阈值",
+      "fan_abnormal": "风扇状态异常",
+      "disk_abnormal": "磁盘状态异常",
+      "pool_abnormal": "存储池状态异常"
+    }
+  },
+  "services": {
+    "reboot_device": {
+      "name": "设备重启",
+      "description": "设备重启。"
+    },
+
+    "sleep_device": {
+      "name": "设备休眠",
+      "description": "将NAS设备进入休眠模式。"
+    },
+    "wake_device": {
+      "name": "设备唤醒",
+      "description": "将NAS设备从休眠模式唤醒。"
+    },
+    "shutdown_device": {
+      "name": "设备关机",
+      "description": "关闭NAS设备。"
+    }
+  },
+  "entity": {
+    "button": {
+      "reboot": { "name": "重启" },
+      "sleep": { "name": "休眠" },
+      "wake": { "name": "唤醒" },
+      "shutdown": { "name": "关机" }
+    },
+    "sensor": {
+      "device_status": { "name": "设备状态" },
+      "cpu_usage": { "name": "CPU使用率" },
+      "memory_used_gb": { "name": "内存使用量" },
+      "memory_usage_percent": { "name": "内存使用率" },
+      "system_temperature": { "name": "系统温度" },
+      "cpu_temperature": { "name": "CPU温度" },
+      "system_uptime": { "name": "系统运行时间" },
+      "network_upload_speed": { "name": "网络上传速率" },
+      "network_download_speed": { "name": "网络下载速率" },
+      "fan_mode": { "name": "风扇模式" },
+      "fan_status": { "name": "风扇{index}状态" },
+      "disk_temperature": { "name": "磁盘{index}温度" },
+      "disk_status": { "name": "磁盘{index}状态" },
+      "disk_size": { "name": "磁盘{index}大小" },
+
+      "pool_size": { "name": "存储池{index}大小" },
+      "pool_usage": { "name": "存储池{index}使用率" },
+      "pool_status": { "name": "存储池{index}状态" }
+    }
+  }
+}

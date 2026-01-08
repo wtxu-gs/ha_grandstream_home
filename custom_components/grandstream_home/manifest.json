@@ -1,0 +1,28 @@
+{
+  "domain": "grandstream_home",
+  "name": "Grandstream Home",
+  "codeowners": ["@GrandstreamEngineering"],
+  "config_flow": true,
+  "dependencies": [
+    "camera",
+    "stream",
+    "ffmpeg",
+    "webhook",
+    "device_automation"
+  ],
+  "device_automation": {
+    "triggers": true,
+    "actions": true
+  },
+  "documentation": "https://github.com/GrandstreamEngineering/ha_grandstream_home/blob/main/README.md",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/GrandstreamEngineering/ha_grandstream_home/issues",
+  "requirements": ["cryptography>=41.0.0", "requests>=2.31.0"],
+  "translations": ["en", "zh-Hans"],
+  "version": "1.0.0",
+  "zeroconf": [
+    { "type": "_https._tcp.local.", "name": "gds*" },
+    { "type": "_device-info._tcp.local.", "name": "*" }
+  ]
+}

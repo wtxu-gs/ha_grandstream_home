@@ -1,0 +1,145 @@
+{
+  "flow_title": "{name}",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Grandstream Device",
+        "description": "Please enter your device information",
+        "data": {
+          "host": "IP Address",
+          "name": "Device Name",
+          "device_type": "Device Type"
+        },
+        "data_description": {
+          "device_type": "Select device type: GDS (Access Control Device) or GNS (Network Storage)"
+        }
+      },
+      "auth": {
+        "title": "Device Authentication",
+        "description": "Please enter authentication information for {host}\nDevice Type: {device_type}\nDefault Username: {username}",
+        "data": {
+          "username": "Username",
+          "password": "Admin Password",
+          "port": "Port",
+          "rtsp_enable": "Enable RTSP",
+          "rtsp_username": "RTSP Username",
+          "rtsp_password": "RTSP Password"
+        },
+        "data_description": {
+          "username": "Device Login Username",
+          "password": "Device Administrator Password",
+          "rtsp_enable": "Enable RTSP video stream",
+          "rtsp_username": "RTSP Authentication Username (optional)",
+          "rtsp_password": "RTSP Authentication Password (optional)"
+        }
+      },
+      "confirm": {
+        "title": "Confirm Adding Device",
+        "description": "Do you want to add {name} to Home Assistant?"
+      }
+    },
+    "error": {
+      "cannot_connect": "Connection failed",
+      "invalid_auth": "Authentication failed",
+      "unknown": "Unknown Error",
+      "missing_rtsp_credentials": "When enabling RTSP, a username and password are required."
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "personnel_intrusion": "Personnel Loitering/Intrusion Alarm",
+      "hostage": "Duress Alarm",
+      "tamper": "Tamper Alarm",
+      "keypad_error": "Keypad Input Error Alarm",
+      "non_scheduled_access": "Unscheduled Access Alarm",
+      "unauthorized_rfid": "Unauthorized RFID Card Access Alarm",
+      "abnormal_sound": "Abnormal Sound Alarm",
+      "high_temperature": "High Temperature Alarm",
+      "di_1": "DI 1",
+      "di_2": "DI 2",
+      "di_3": "DI 3",
+      "disk_error": "Disk Error/Failure",
+      "disk_offline": "Disk Offline",
+      "pool_degraded": "Storage Pool Degraded",
+      "pool_full": "Storage Pool Full",
+      "fan_abnormal": "Fan Status Abnormal",
+      "system_high_temp": "System High Temperature",
+      "cpu_high_usage": "CPU High Usage",
+      "memory_high_usage": "Memory High Usage",
+      "cpu_usage_above": "CPU Usage Exceeds Threshold",
+      "memory_usage_above": "Memory Usage Exceeds Threshold",
+      "system_temperature_above": "System Temperature Exceeds Threshold",
+      "cpu_temperature_above": "CPU Temperature Exceeds Threshold",
+      "disk_temperature_above": "Disk Temperature Exceeds Threshold",
+      "pool_usage_above": "Storage Pool Usage Exceeds Threshold",
+      "disk_abnormal": "Disk Status Abnormal",
+      "pool_abnormal": "Storage Pool Status Abnormal"
+    },
+    "action_type": {
+      "reboot_device": "Restart",
+      "sleep_device": "Sleep",
+      "wake_device": "Wake Up",
+      "shutdown_device": "Shut Down"
+    },
+    "condition_type": {
+      "cpu_usage_above": "CPU Usage Exceeds Threshold",
+      "memory_usage_above": "Memory Usage Exceeds Threshold",
+      "disk_temperature_above": "Disk Temperature Exceeds Threshold",
+      "cpu_temperature_above": "CPU Temperature Exceeds Threshold",
+      "system_temperature_above": "System Temperature Exceeds Threshold",
+      "pool_usage_above": "Storage Pool Usage Exceeds Threshold",
+      "fan_abnormal": "Fan Status Abnormal",
+      "disk_abnormal": "Disk Status Abnormal",
+      "pool_abnormal": "Storage Pool Status Abnormal"
+    }
+  },
+  "services": {
+    "reboot_device": {
+      "name": "Restart",
+      "description": "Restart."
+    },
+    "sleep_device": {
+      "name": "Sleep",
+      "description": "Put the NAS into sleep mode."
+    },
+    "wake_device": {
+      "name": "Wake Up",
+      "description": "Wake up the NAS from sleep mode."
+    },
+    "shutdown_device": {
+      "name": "Shut Down",
+      "description": "Shut down the NAS."
+    }
+  },
+  "entity": {
+    "button": {
+      "reboot": { "name": "Restart" },
+      "sleep": { "name": "Sleep" },
+      "wake": { "name": "Wake Up" },
+      "shutdown": { "name": "Shut Down" }
+    },
+    "sensor": {
+      "device_status": { "name": "Device Status" },
+      "cpu_usage": { "name": "CPU Usage" },
+      "memory_used_gb": { "name": "Memory Used" },
+      "memory_usage_percent": { "name": "Memory Usage" },
+      "system_temperature": { "name": "System Temperature" },
+      "cpu_temperature": { "name": "CPU Temperature" },
+      "system_uptime": { "name": "System Uptime" },
+      "network_upload_speed": { "name": "Network Upload Speed" },
+      "network_download_speed": { "name": "Network Download Speed" },
+      "fan_mode": { "name": "Fan Mode" },
+      "fan_status": { "name": "Fan {index} Status" },
+      "disk_temperature": { "name": "Disk {index} Temperature" },
+      "disk_status": { "name": "Disk {index} Status" },
+      "disk_size": { "name": "Disk {index} Size" },
+
+      "pool_size": { "name": "Storage Pool {index} Size" },
+      "pool_usage": { "name": "Storage Pool {index} Usage" },
+      "pool_status": { "name": "Storage Pool {index} Status" }
+    }
+  }
+}
