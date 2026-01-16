@@ -1,0 +1,53 @@
+name: Set Repository Topics
+
+# Auto-set repository topics for better discoverability
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/set-topics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  set-topics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set repository topics using GitHub CLI
+        run: |
+          # Define topics
+          TOPICS=(
+            "home-assistant"
+            "home-assistant-integration"
+            "hass"
+            "hacs"
+            "smart-home"
+            "iot"
+            "custom-component"
+            "grandstream"
+            "gds"
+            "gns"
+            "access-control"
+            "network-storage"
+          )
+          
+          echo "Setting topics for repository: ${{ github.repository }}"
+          echo "Topics: ${TOPICS[*]}"
+          
+          # Add each topic one by one
+          for topic in "${TOPICS[@]}"; do
+            echo "Adding topic: $topic"
+            gh repo edit ${{ github.repository }} --add-topic "$topic" || true
+          done
+          
+          echo ""
+          echo "Topics set successfully!"
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}

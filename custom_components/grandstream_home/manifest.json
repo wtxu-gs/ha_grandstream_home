@@ -7,20 +7,14 @@
     "camera",
     "stream",
     "ffmpeg",
-    "webhook",
-    "device_automation"
+    "webhook"
   ],
-  "device_automation": {
-    "triggers": true,
-    "actions": true
-  },
   "documentation": "https://github.com/GrandstreamEngineering/grandstream_home/blob/main/README.md",
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/GrandstreamEngineering/grandstream_home/issues",
   "requirements": ["cryptography>=41.0.0", "requests>=2.31.0"],
-  "translations": ["en", "zh-Hans"],
-  "version": "1.0.0",
+  "version": "1.0.1",
   "zeroconf": [
     { "type": "_https._tcp.local.", "name": "gds*" },
     { "type": "_device-info._tcp.local.", "name": "*" }
