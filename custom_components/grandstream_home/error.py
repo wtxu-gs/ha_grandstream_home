@@ -31,3 +31,19 @@ class GrandstreamRTSPError(GrandstreamError):
 
 class GrandstreamNotificationError(GrandstreamError):
     """Exception raised when setting event notification fails."""
+
+
+class GrandstreamUnlockError(GrandstreamError):
+    """Exception raised when door unlock operation fails."""
+
+
+class GrandstreamAuthTokenError(GrandstreamError):
+    """Exception raised when access token acquisition fails."""
+
+
+class GrandstreamSignatureError(GrandstreamError):
+    """Exception raised when signature verification fails."""
+
+
+class GrandstreamChallengeError(GrandstreamError):
+    """Exception raised when challenge code is invalid or expired."""

@@ -3,14 +3,13 @@
 import logging
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from . import DOMAIN, GrandstreamConfigEntry
 from .const import DEVICE_TYPE_GDS, DEVICE_TYPE_GNS_NAS
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: GrandstreamConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Grandstream button platform."""
@@ -33,6 +32,11 @@ async def async_setup_entry(
             GnsWakeButton(coordinator, device),
             GnsShutdownButton(coordinator, device),
         ]
+    elif getattr(device, "device_type", None) == DEVICE_TYPE_GDS:
+        entities = [
+            GrandstreamRebootButton(coordinator, device),
+            GdsResetTamperButton(coordinator, device),
+        ]
     else:
         entities = [
             GrandstreamRebootButton(coordinator, device),
@@ -44,7 +48,7 @@ async def async_setup_entry(
 class GrandstreamBaseButton(CoordinatorEntity, ButtonEntity):
     """Representation of a Grandstream button."""
 
-    def __init__(self, coordinator, device):
+    def __init__(self, coordinator, device) -> None:
         """Initialize the button."""
         super().__init__(coordinator)
         self.coordinator = coordinator
@@ -66,23 +70,88 @@ class GrandstreamBaseButton(CoordinatorEntity, ButtonEntity):
 
     def _get_device_id(self):
         """Get device ID from device registry."""
-        if self._attr_device_info and "identifiers" in self._attr_device_info:
-            for identifier in self._attr_device_info["identifiers"]:
-                if identifier[0] == DOMAIN:
-                    # Get device registry
-                    device_registry = dr.async_get(self.hass)
-                    device = device_registry.async_get_device(
-                        identifiers={(DOMAIN, identifier[1])}
-                    )
-                    if device:
-                        return device.id
+        try:
+            device_info = self._attr_device_info
+            if not device_info or not hasattr(device_info, "get"):
+                return None
+
+            identifiers = device_info.get("identifiers")
+            if not identifiers:
+                return None
+
+            for identifier in identifiers:
+                if identifier[0] != DOMAIN:
+                    continue
+
+                # Get device registry
+                device_registry = dr.async_get(self.hass)
+                device = device_registry.async_get_device(
+                    identifiers={(DOMAIN, identifier[1])}
+                )
+                if device:
+                    return device.id
+        except (AttributeError, TypeError, KeyError):
+            pass
         return None
 
+    def press(self) -> None:
+        """Press the button (base implementation)."""
+
+    async def _safe_api_call(self, api_method, operation_name: str):
+        """Safely call API method with unified error handling.
+
+        Args:
+            api_method: API method to call
+            operation_name: Operation name for logging
+
+        Returns:
+            True if successful, False otherwise
+
+        """
+        try:
+            await self.hass.async_add_executor_job(api_method)
+        except (ConnectionError, TimeoutError, ValueError, RuntimeError) as err:
+            _LOGGER.error("Failed to %s: %s", operation_name, err)
+            return False
+        else:
+            return True
+
+    def _check_api_availability(self, api, check_admin: bool = False) -> bool:
+        """Check if API is available for operations.
+
+        Args:
+            api: API instance to check
+            check_admin: Whether to check admin status
+
+        Returns:
+            True if API is available and ready
+
+        """
+        if not api:
+            return False
+
+        # Check if device is online
+        if hasattr(api, "is_online") and not api.is_online:
+            return False
+
+        # Check if account is locked (for GDS devices)
+        if hasattr(api, "is_account_locked") and api.is_account_locked:
+            return False
+
+        # Check if device is authenticated (for GDS devices)
+        if hasattr(api, "is_authenticated") and not api.is_authenticated:
+            return False
+
+        # Check if user is admin (for GNS devices)
+        if check_admin and hasattr(api, "is_admin") and not api.is_admin:
+            return False
+
+        return True
 
 class GrandstreamRebootButton(GrandstreamBaseButton):
     """Representation of a Grandstream reboot button."""
 
-    def __init__(self, coordinator, device):
+    def __init__(self, coordinator, device) -> None:
         """Initialize the reboot button."""
         super().__init__(coordinator, device)
         self._attr_unique_id = f"{device.unique_id}_reboot"
@@ -96,68 +165,10 @@ class GrandstreamRebootButton(GrandstreamBaseButton):
     def available(self) -> bool:
         """Return if entity is available."""
         api = self._get_api_instance()
-        if not api:
-            return False
-
-        device_type = getattr(self.device, "device_type", None)
-
-        # For GNS NAS devices, check online status and admin permission
-        if device_type == DEVICE_TYPE_GNS_NAS:
-            # Debug logging
-            _LOGGER.debug(
-                "Reboot button availability check (GNS): is_online=%s, is_admin=%s",
-                getattr(api, "is_online", "N/A"),
-                getattr(api, "is_admin", "N/A"),
-            )
-
-            # Check if device is online
-            if hasattr(api, "is_online") and not api.is_online:
-                _LOGGER.debug("Reboot button unavailable: GNS device offline")
-                return False
-            # Check if user is admin
-            if hasattr(api, "is_admin") and not api.is_admin:
-                _LOGGER.debug("Reboot button unavailable: user is not admin")
-                return False
-            return True
-
-        # For GDS devices, check online, authentication and lock status
-        if device_type == DEVICE_TYPE_GDS:
-            is_online = getattr(api, "is_online", False)
-            is_authenticated = getattr(api, "is_authenticated", False)
-            is_locked = getattr(api, "is_account_locked", False)
-
-            # Debug logging
-            _LOGGER.debug(
-                "Reboot button availability check (GDS): is_online=%s, is_authenticated=%s, is_locked=%s",
-                is_online,
-                is_authenticated,
-                is_locked,
-            )
-
-            # Check if device is offline
-            if hasattr(api, "is_online") and not is_online:
-                _LOGGER.debug("Reboot button unavailable: GDS device offline")
-                return False
-
-            # Check if account is locked
-            if hasattr(api, "is_account_locked") and is_locked:
-                _LOGGER.debug("Reboot button unavailable: GDS account locked")
-                return False
-
-            # Check if device is authenticated
-            if hasattr(api, "is_authenticated") and not is_authenticated:
-                _LOGGER.debug(
-                    "Reboot button unavailable: GDS device not authenticated"
-                )
-                return False
-
-            return True
-
-        # Unknown device type, default to available
-        return True
+        return self._check_api_availability(api)
 
     async def async_press(self) -> None:
-        """Handle the button press - directly call API method."""
+        """Handle the button press - reboot device."""
         api = self._get_api_instance()
         if api and hasattr(api, "reboot_device"):
             _LOGGER.info(
@@ -165,7 +176,7 @@ class GrandstreamRebootButton(GrandstreamBaseButton):
                 self.device.name,
                 getattr(api, "device_type", "unknown"),
             )
-            await self.hass.async_add_executor_job(api.reboot_device)
+            await self._safe_api_call(api.reboot_device, "reboot device")
             return
 
         # Fallback: get device_id and call service
@@ -182,7 +193,7 @@ class GrandstreamRebootButton(GrandstreamBaseButton):
 class GnsSpecializedButton(GrandstreamBaseButton):
     """Base class for GNS NAS specialized buttons."""
 
-    def __init__(self, coordinator, device, unique_id_suffix, translation_key, icon):
+    def __init__(self, coordinator, device, unique_id_suffix, translation_key, icon) -> None:
         """Initialize the GNS button."""
         super().__init__(coordinator, device)
         self._attr_unique_id = f"{device.unique_id}_{unique_id_suffix}"
@@ -191,32 +202,22 @@ class GnsSpecializedButton(GrandstreamBaseButton):
         self._attr_entity_category = EntityCategory.CONFIG
         self._attr_device_info = device.device_info
         self._attr_icon = icon
-        self._service_name = None  # To be set by subclasses
-        self._api_method_name = None  # To be set by subclasses
+        self._service_name: str | None = None  # To be set by subclasses
+        self._api_method_name: str | None = None  # To be set by subclasses
 
     @property
     def available(self) -> bool:
         """Return if entity is available."""
         api = self._get_api_instance()
-        if not api:
-            return False
-
-        # Check if device is online
-        if hasattr(api, "is_online") and not api.is_online:
-            return False
-
-        # Check if user is admin
-        if hasattr(api, "is_admin") and not api.is_admin:
-            return False
-
-        return True
+        return self._check_api_availability(api, check_admin=True)
 
     async def async_press(self) -> None:
         """Handle button press - directly call API."""
         api = self._get_api_instance()
         if api and self._api_method_name and hasattr(api, self._api_method_name):
-            await self.hass.async_add_executor_job(
-                getattr(api, self._api_method_name)
+            await self._safe_api_call(
+                getattr(api, self._api_method_name),
+                self._api_method_name
             )
             return
 
@@ -227,7 +228,7 @@ class GnsSpecializedButton(GrandstreamBaseButton):
 class GnsSleepButton(GnsSpecializedButton):
     """GNS NAS sleep button."""
 
-    def __init__(self, coordinator, device):
+    def __init__(self, coordinator, device) -> None:
         """Initialize the sleep button."""
         super().__init__(coordinator, device, "sleep", "sleep", "mdi:sleep")
         self._service_name = "sleep_device"
@@ -237,7 +238,7 @@ class GnsSleepButton(GnsSpecializedButton):
 class GnsWakeButton(GnsSpecializedButton):
     """GNS NAS wake button."""
 
-    def __init__(self, coordinator, device):
+    def __init__(self, coordinator, device) -> None:
         """Initialize the wake button."""
         super().__init__(coordinator, device, "wake", "wake", "mdi:eye")
         self._service_name = "wake_device"
@@ -260,8 +261,35 @@ class GnsWakeButton(GnsSpecializedButton):
 class GnsShutdownButton(GnsSpecializedButton):
     """GNS NAS shutdown button."""
 
-    def __init__(self, coordinator, device):
+    def __init__(self, coordinator, device) -> None:
         """Initialize the shutdown button."""
         super().__init__(coordinator, device, "shutdown", "shutdown", "mdi:power")
         self._service_name = "shutdown_device"
         self._api_method_name = "shutdown_device"
+
+
+class GdsResetTamperButton(GrandstreamBaseButton):
+    """GDS reset all alarms button."""
+
+    def __init__(self, coordinator, device) -> None:
+        """Initialize the reset all alarms button."""
+        super().__init__(coordinator, device)
+        self._attr_unique_id = f"{device.unique_id}_reset_all_alarms"
+        self._attr_has_entity_name = True
+        self._attr_translation_key = "reset_all_alarms"
+        self._attr_entity_category = EntityCategory.CONFIG
+        self._attr_device_info = device.device_info
+        self._attr_icon = "mdi:alarm-light-off"
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        api = self._get_api_instance()
+        return self._check_api_availability(api)
+
+    async def async_press(self) -> None:
+        """Handle the button press - reset all alarms."""
+        api = self._get_api_instance()
+        if api and hasattr(api, "reset_all_alarms"):
+            _LOGGER.info("Resetting all alarms for device: %s", self.device.name)
+            await self._safe_api_call(api.reset_all_alarms, "reset alarms")

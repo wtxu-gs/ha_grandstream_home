@@ -10,7 +10,7 @@ and monitoring of your Grandstream devices directly through Home Assistant.
 
 ### Device Support
 
-- **GDS372X**: Real-time status monitoring, call status detection, device control
+- **GDS372X/GSC356X**: Real-time status monitoring, call status detection, device control
 - **GNS5004E/GNS5004R**: Storage monitoring, system performance monitoring, temperature detection, device control
 
 ### Monitoring Metrics

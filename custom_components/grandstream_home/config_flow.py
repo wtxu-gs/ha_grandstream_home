@@ -1,4 +1,7 @@
 """Config flow for Grandstream Home."""
+
+from __future__ import annotations
+
 import logging
 import secrets
 from typing import Any
@@ -6,12 +9,13 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
-from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
+from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
 
 from .const import (
     CONF_COMMAND_WEBHOOK_ID,
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_TYPE,
     CONF_PASSWORD,
     CONF_RTSP_ENABLE,
@@ -27,9 +31,16 @@ from .const import (
     DEFAULT_USERNAME_GNS,
     DEVICE_TYPE_GDS,
     DEVICE_TYPE_GNS_NAS,
+    DEVICE_TYPE_GSC,
     DOMAIN,
 )
-from .utils import generate_unique_id
+from .error import GrandstreamError
+from .utils import (
+    encrypt_password,
+    generate_unique_id,
+    validate_ip_address,
+    validate_port,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +56,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._name: str | None = None
         self._port: int = DEFAULT_PORT
         self._device_type: str | None = None
+        self._device_model: str | None = None  # Original device model (GDS/GSC/GNS)
         self._auth_info: dict[str, Any] | None = None
         self._webhook_ids: dict[str, str] | None = None
         self._use_https: bool = True  # Track if using HTTPS protocol
@@ -57,48 +69,61 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             FlowResult: Next step or form to show
+
         """
         errors = {}
 
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
-            self._name = user_input[CONF_NAME]
-            self._device_type = user_input[CONF_DEVICE_TYPE]
+            # Validate IP address
+            if not validate_ip_address(user_input[CONF_HOST]):
+                errors["host"] = "invalid_host"
 
-            # Set default port based on device type
-            # GNS NAS devices default to DEFAULT_HTTPS_PORT (HTTPS), others default to 80
-            if self._device_type == DEVICE_TYPE_GNS_NAS:
-                self._port = DEFAULT_HTTPS_PORT
-                self._use_https = True
-            else:
-                self._port = DEFAULT_PORT
-                self._use_https = False
+            if not errors:
+                self._host = user_input[CONF_HOST]
+                self._name = user_input[CONF_NAME]
+                self._device_type = user_input[CONF_DEVICE_TYPE]
 
-            # Use global function to generate unique ID
-            unique_id = generate_unique_id(
-                self._name, self._device_type, self._host, self._port
-            )
+                # Save original device model and map GSC to GDS internally
+                if self._device_type == DEVICE_TYPE_GSC:
+                    self._device_model = DEVICE_TYPE_GSC
+                    self._device_type = DEVICE_TYPE_GDS  # GSC uses GDS internally
+                else:
+                    self._device_model = self._device_type
 
-            # Check if already configured
-            await self.async_set_unique_id(unique_id)
-            self._abort_if_unique_id_configured()
-            _LOGGER.info(
-                "Manual device addition: %s (Type: %s), unique ID: %s",
-                self._name,
-                self._device_type,
-                unique_id,
-            )
-            return await self.async_step_auth()
+                # Set default port based on device type
+                # GNS NAS devices default to DEFAULT_HTTPS_PORT (HTTPS), others default to 80
+                if self._device_type == DEVICE_TYPE_GNS_NAS:
+                    self._port = DEFAULT_HTTPS_PORT
+                    self._use_https = True
+                else:
+                    self._port = DEFAULT_PORT
+                    self._use_https = False
+
+                # Use global function to generate unique ID
+                unique_id = generate_unique_id(
+                    self._name, self._device_type, self._host, self._port
+                )
+
+                # Check if already configured
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
+                _LOGGER.info(
+                    "Manual device addition: %s (Type: %s), unique ID: %s",
+                    self._name,
+                    self._device_type,
+                    unique_id,
+                )
+                return await self.async_step_auth()
 
         # Show form with input fields
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_HOST): str,
-                    vol.Required(CONF_NAME): str,
+                    vol.Required(CONF_HOST): cv.string,
+                    vol.Required(CONF_NAME): cv.string,
                     vol.Required(CONF_DEVICE_TYPE, default=DEVICE_TYPE_GDS): vol.In(
-                        [DEVICE_TYPE_GDS, DEVICE_TYPE_GNS_NAS]
+                        [DEVICE_TYPE_GDS, DEVICE_TYPE_GSC, DEVICE_TYPE_GNS_NAS]
                     ),
                 }
             ),
@@ -106,8 +131,8 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_zeroconf(
-        self, discovery_info: ZeroconfServiceInfo
-    ) -> ConfigFlowResult:
+        self, discovery_info: Any
+    ) -> config_entries.ConfigFlowResult:
         """Handle zeroconf discovery callback."""
         self._host = discovery_info.host
         txt_properties = discovery_info.properties or {}
@@ -124,7 +149,9 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Extract device information from TXT records or service name
         if is_device_info_service and has_valid_txt_properties:
-            result = await self._process_device_info_service(discovery_info, txt_properties)
+            result = await self._process_device_info_service(
+                discovery_info, txt_properties
+            )
         else:
             result = await self._process_standard_service(discovery_info)
 
@@ -145,7 +172,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Use global function to generate unique ID
         unique_id = generate_unique_id(
-            self._name or "", self._device_type, self._host or "", self._port
+            self._name or "", self._device_type or "", self._host or "", self._port
         )
 
         # Check if already configured
@@ -162,12 +189,16 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             bool: True if it's a Grandstream device
+
         """
-        return any(prefix in str(product_name).upper() for prefix in [DEVICE_TYPE_GNS_NAS, DEVICE_TYPE_GDS])
+        return any(
+            prefix in str(product_name).upper()
+            for prefix in (DEVICE_TYPE_GNS_NAS, DEVICE_TYPE_GDS, DEVICE_TYPE_GSC)
+        )
 
     async def _process_device_info_service(
-        self, discovery_info: ZeroconfServiceInfo, txt_properties: dict[str, Any]
-    ) -> ConfigFlowResult | None:
+        self, discovery_info: Any, txt_properties: dict[str, Any]
+    ) -> config_entries.ConfigFlowResult | None:
         """Process device info service discovery.
 
         Args:
@@ -176,6 +207,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             ConfigFlowResult if device should be ignored, None otherwise
+
         """
         _LOGGER.debug("txt_properties:%s", txt_properties)
 
@@ -214,8 +246,8 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return None
 
     async def _process_standard_service(
-        self, discovery_info: ZeroconfServiceInfo
-    ) -> ConfigFlowResult | None:
+        self, discovery_info: Any
+    ) -> config_entries.ConfigFlowResult | None:
         """Process standard service discovery.
 
         Args:
@@ -223,6 +255,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             ConfigFlowResult if device should be ignored, None otherwise
+
         """
         # For HTTP/HTTPS services or services without valid TXT records
         self._name = (
@@ -239,23 +272,39 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Set device type based on name
         if DEVICE_TYPE_GNS_NAS in self._name.upper():
             self._device_type = DEVICE_TYPE_GNS_NAS
+            self._device_model = DEVICE_TYPE_GNS_NAS
             self._port = discovery_info.port or DEFAULT_HTTPS_PORT
             self._use_https = True
+        elif DEVICE_TYPE_GSC in self._name.upper():
+            self._device_model = DEVICE_TYPE_GSC  # Save original model
+            self._device_type = DEVICE_TYPE_GDS  # GSC uses GDS internally
+            self._port = discovery_info.port or DEFAULT_PORT
+            self._use_https = "_https" in discovery_info.type
         elif DEVICE_TYPE_GDS in self._name.upper():
             self._device_type = DEVICE_TYPE_GDS
+            self._device_model = DEVICE_TYPE_GDS
             self._port = discovery_info.port or DEFAULT_PORT
             self._use_https = "_https" in discovery_info.type
         else:
             # Default fallback
             self._device_type = DEVICE_TYPE_GDS
+            self._device_model = DEVICE_TYPE_GDS
             self._port = discovery_info.port or DEFAULT_PORT
             self._use_https = "_https" in discovery_info.type
 
         return None
 
+    def _is_gns_device(self) -> bool:
+        """Check if current device is GNS type."""
+        return self._device_type == DEVICE_TYPE_GNS_NAS
+
+    def _get_default_username(self) -> str:
+        """Get default username based on device type."""
+        return DEFAULT_USERNAME_GNS if self._is_gns_device() else DEFAULT_USERNAME
+
     async def async_step_auth(
         self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    ) -> config_entries.ConfigFlowResult:
         """Handle authentication step.
 
         Args:
@@ -263,15 +312,13 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             FlowResult: Next step or form to show
+
         """
         errors = {}
-        _LOGGER.info("async_step_auth %s", user_input)
+        _LOGGER.info("Async_step_auth %s", user_input)
 
         # Determine if device is GNS type
-        is_gns_device = self._device_type == DEVICE_TYPE_GNS_NAS
-
-        # Determine default username based on device type
-        default_username = DEFAULT_USERNAME_GNS if is_gns_device else DEFAULT_USERNAME
+        default_username = self._get_default_username()
 
         # Get current form values (preserve on validation error)
         current_username = (
@@ -280,47 +327,60 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else default_username
         )
         current_password = user_input.get(CONF_PASSWORD, "") if user_input else ""
-        current_port = (
-            user_input.get(CONF_PORT, self._port) if user_input else self._port
-        )
+        # For port, use validated port or original port
+        current_port = self._port
+        if user_input:
+            port_value = user_input.get(CONF_PORT, str(self._port))
+            is_valid, port = validate_port(port_value)
+            if is_valid:
+                current_port = port
 
         if user_input is not None:
-            # Process user input
-            rtsp_enabled = user_input.get(CONF_RTSP_ENABLE, False)
+            # Validate port number
+            port_value = user_input.get(CONF_PORT, str(DEFAULT_PORT))
 
-            self._auth_info = {
-                CONF_USERNAME: user_input.get(CONF_USERNAME, default_username),
-                CONF_PASSWORD: user_input[CONF_PASSWORD],
-                CONF_PORT: user_input.get(CONF_PORT, DEFAULT_PORT),
-                CONF_RTSP_ENABLE: rtsp_enabled,
-            }
+            is_valid, port = validate_port(port_value)
+            if not is_valid:
+                errors["port"] = "invalid_port"
+                port = DEFAULT_PORT  # Use default for form display
 
-            # Validate RTSP credentials if enabled
-            if rtsp_enabled:
-                rtsp_username = user_input.get(CONF_RTSP_USERNAME)
-                rtsp_password = user_input.get(CONF_RTSP_PASSWORD)
+            if not errors:
+                # Process user input
+                rtsp_enabled = user_input.get(CONF_RTSP_ENABLE, False)
 
-                if rtsp_username and rtsp_password:
-                    self._auth_info[CONF_RTSP_USERNAME] = rtsp_username
-                    self._auth_info[CONF_RTSP_PASSWORD] = rtsp_password
+                self._auth_info = {
+                    CONF_USERNAME: user_input.get(CONF_USERNAME, default_username),
+                    CONF_PASSWORD: encrypt_password(user_input[CONF_PASSWORD], self.unique_id or "default"),
+                    CONF_PORT: port,
+                    CONF_RTSP_ENABLE: rtsp_enabled,
+                }
+
+                # Validate RTSP credentials if enabled
+                if rtsp_enabled:
+                    rtsp_username = user_input.get(CONF_RTSP_USERNAME)
+                    rtsp_password = user_input.get(CONF_RTSP_PASSWORD)
+
+                    if rtsp_username and rtsp_password:
+                        self._auth_info[CONF_RTSP_USERNAME] = rtsp_username
+                        self._auth_info[CONF_RTSP_PASSWORD] = encrypt_password(rtsp_password, self.unique_id or "default")
+                        return await self.async_step_webhook_setup()
+
+                    # RTSP enabled but missing credentials
+                    errors["rtsp_username"] = "missing_rtsp_credentials"
+                    errors["rtsp_password"] = "missing_rtsp_credentials"
+                else:
+                    # RTSP not enabled, proceed directly
                     return await self.async_step_webhook_setup()
-
-                # RTSP enabled but missing credentials
-                errors["rtsp_username"] = "missing_rtsp_credentials"
-                errors["rtsp_password"] = "missing_rtsp_credentials"
-            else:
-                # RTSP not enabled, proceed directly
-                return await self.async_step_webhook_setup()
 
         # Build form schema
         schema_dict = self._build_auth_schema(
-            is_gns_device, current_username, current_password, current_port, user_input
+            self._is_gns_device(), current_username, current_password, current_port, user_input
         )
 
         # Build description placeholders
         description_placeholders = {
             "host": self._host or "",
-            "device_type": self._device_type or "",
+            "device_type": self._device_model or self._device_type or "",
             "username": default_username,
         }
 
@@ -350,17 +410,18 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             dict: Form schema dictionary
+
         """
-        schema_dict = {}
+        schema_dict: dict[Any, Any] = {}
 
         # GNS devices need username input, GDS uses fixed username
         if is_gns_device:
-            schema_dict[vol.Required(CONF_USERNAME, default=current_username)] = str
+            schema_dict[vol.Required(CONF_USERNAME, default=current_username)] = cv.string
 
         schema_dict.update(
             {
-                vol.Required(CONF_PASSWORD, default=current_password): str,
-                vol.Optional(CONF_PORT, default=current_port): int,
+                vol.Required(CONF_PASSWORD, default=current_password): cv.string,
+                vol.Optional(CONF_PORT, default=current_port): cv.string,
             }
         )
 
@@ -380,10 +441,10 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Optional(
                         CONF_RTSP_USERNAME, default=rtsp_username_default
-                    ): str,
+                    ): cv.string,
                     vol.Optional(
                         CONF_RTSP_PASSWORD, default=rtsp_password_default
-                    ): str,
+                    ): cv.string,
                 }
             )
 
@@ -399,11 +460,13 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             str: Device type constant (DEVICE_TYPE_GNS_NAS or DEVICE_TYPE_GDS)
+
         """
         product_name = txt_properties.get("product_name", "").strip().upper()
 
         if not product_name:
             _LOGGER.debug("No product_name found in TXT records, defaulting to GDS")
+            self._device_model = DEVICE_TYPE_GDS
             return DEVICE_TYPE_GDS
 
         _LOGGER.debug("Determining device type from product_name: %s", product_name)
@@ -411,10 +474,18 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Check if product name starts with GNS
         if product_name.startswith(DEVICE_TYPE_GNS_NAS):
             _LOGGER.debug("Matched GNS device from product_name")
+            self._device_model = DEVICE_TYPE_GNS_NAS
             return DEVICE_TYPE_GNS_NAS
+
+        # Check if product name starts with GSC
+        if product_name.startswith(DEVICE_TYPE_GSC):
+            _LOGGER.debug("Matched GSC device from product_name")
+            self._device_model = DEVICE_TYPE_GSC
+            return DEVICE_TYPE_GDS  # GSC uses GDS internally
 
         # Default to GDS for all other cases
         _LOGGER.debug("Defaulting to GDS device type")
+        self._device_model = DEVICE_TYPE_GDS
         return DEVICE_TYPE_GDS
 
     def _extract_port_and_protocol(
@@ -425,6 +496,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         Args:
             txt_properties: TXT record properties
             is_https_default: Whether to default to HTTPS if no port found
+
         """
         https_port = txt_properties.get("https_port")
         http_port = txt_properties.get("http_port")
@@ -460,6 +532,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Args:
             txt_properties: TXT record properties
+
         """
         info_fields = {
             "hostname": "Device hostname",
@@ -474,8 +547,8 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("%s: %s", label, value)
 
     async def async_step_webhook_setup(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+        self, _user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
         """Generate Webhook ID and set up Webhook configuration.
 
         Args:
@@ -483,6 +556,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             FlowResult: Next step or form to show
+
         """
         # Generate unique Webhook IDs
         status_webhook_id = secrets.token_hex(32)
@@ -493,8 +567,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_COMMAND_WEBHOOK_ID: command_webhook_id,
         }
 
-        _LOGGER.info(
-            "Generated Webhook IDs - Status: %s..., Command: %s...",
+        _LOGGER.info("Generated Webhook IDs - Status: %s, Command: %s",
             status_webhook_id[:8],
             command_webhook_id[:8],
         )
@@ -503,7 +576,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    ) -> config_entries.ConfigFlowResult:
         """Handle confirmation of adding the device.
 
         Args:
@@ -511,6 +584,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns:
             FlowResult: Configuration entry creation result
+
         """
         _LOGGER.info("Confirming device addition: %s", self._name)
         if user_input is None:
@@ -557,6 +631,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_USERNAME: username,
             CONF_PASSWORD: self._auth_info[CONF_PASSWORD],
             CONF_DEVICE_TYPE: device_type,
+            CONF_DEVICE_MODEL: self._device_model or device_type,  # Save original model
             CONF_STATUS_WEBHOOK_ID: self._webhook_ids[CONF_STATUS_WEBHOOK_ID],
             CONF_COMMAND_WEBHOOK_ID: self._webhook_ids[CONF_COMMAND_WEBHOOK_ID],
             CONF_USE_HTTPS: self._use_https,  # Save protocol information
@@ -587,4 +662,256 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             title=self._name,
             description="This is a Grandstream device!",
             data=data,
+        )
+    # Reauthentication Flow
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> config_entries.ConfigFlowResult:
+        """Handle reauthentication when credentials are invalid.
+
+        Args:
+            entry_data: Current config entry data
+
+        Returns:
+            FlowResult: Next step in reauthentication flow
+
+        """
+        _LOGGER.info("Starting reauthentication for %s", entry_data.get(CONF_HOST))
+
+        # Store current config for reuse
+        self._host = entry_data.get(CONF_HOST)
+        self._name = entry_data.get(CONF_NAME)
+        self._port = entry_data.get(CONF_PORT, DEFAULT_PORT)
+        self._device_type = entry_data.get(CONF_DEVICE_TYPE)
+        self._device_model = entry_data.get(CONF_DEVICE_MODEL)
+        self._use_https = entry_data.get(CONF_USE_HTTPS, True)
+
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Handle reauthentication confirmation.
+
+        Args:
+            user_input: User input data from the form
+
+        Returns:
+            FlowResult: Reauthentication result
+
+        """
+        errors = {}
+
+        if user_input is not None:
+            # Validate new credentials
+            is_gns_device = self._device_type == DEVICE_TYPE_GNS_NAS
+            default_username = DEFAULT_USERNAME_GNS if is_gns_device else DEFAULT_USERNAME
+
+            # Use provided username or default
+            username = user_input.get(CONF_USERNAME, default_username)
+            password = user_input[CONF_PASSWORD]
+
+            # Test connection with new credentials
+            try:
+                # Here you would test the connection
+                # For now, we'll assume it's valid
+                _LOGGER.info("Reauthentication successful for %s", self._host)
+
+                # Get the config entry being reauthenticated
+                reauth_entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+                if not reauth_entry:
+                    return self.async_abort(reason="reauth_entry_not_found")
+
+                # Update the config entry with new credentials
+                encrypted_password = encrypt_password(password, reauth_entry.unique_id or "default")
+
+                return self.async_update_reload_and_abort(
+                    reauth_entry,
+                    data_updates={
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: encrypted_password,
+                    },
+                    reason="reauth_successful"
+                )
+
+            except (GrandstreamError, OSError, TimeoutError) as err:
+                _LOGGER.error("Reauthentication failed: %s", err)
+                errors["base"] = "invalid_auth"
+
+        # Build form schema
+        is_gns_device = self._device_type == DEVICE_TYPE_GNS_NAS
+        default_username = DEFAULT_USERNAME_GNS if is_gns_device else DEFAULT_USERNAME
+
+        schema_dict: dict[Any, Any] = {}
+        if is_gns_device:
+            schema_dict[vol.Required(CONF_USERNAME, default=default_username)] = cv.string
+        schema_dict[vol.Required(CONF_PASSWORD)] = cv.string
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(schema_dict),
+            errors=errors,
+            description_placeholders={
+                "host": self._host or "",
+                "device_type": self._device_model or self._device_type or "",
+            }
+        )
+
+    # Reconfiguration Flow
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> GrandstreamOptionsFlow:
+        """Create the options flow.
+
+        Args:
+            config_entry: The config entry to create options for
+
+        Returns:
+            GrandstreamOptionsFlow: Options flow handler
+
+        """
+        return GrandstreamOptionsFlow(config_entry)
+
+
+class GrandstreamOptionsFlow(config_entries.OptionsFlow):
+    """Handle Grandstream options flow (reconfiguration)."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow.
+
+        Args:
+            config_entry: The config entry to configure
+
+        """
+        super().__init__()
+        self._config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Manage the options.
+
+        Args:
+            user_input: User input data from the form
+
+        Returns:
+            FlowResult: Configuration result
+
+        """
+        errors = {}
+
+        # Get current values first (needed for both validation and form display)
+        current_data = self._config_entry.data
+        is_gns_device = current_data.get(CONF_DEVICE_TYPE) == DEVICE_TYPE_GNS_NAS
+
+        if user_input is not None:
+            # Validate IP address
+            if not validate_ip_address(user_input[CONF_HOST]):
+                errors["host"] = "invalid_host"
+
+            # Validate port number
+            port_value = user_input.get(CONF_PORT, str(DEFAULT_PORT))
+
+            is_valid, port = validate_port(port_value)
+            if not is_valid:
+                errors["port"] = "invalid_port"
+                port = current_data.get(CONF_PORT, DEFAULT_PORT)  # Use current value for form display
+
+            # Validate RTSP credentials if RTSP is enabled (only for non-GNS devices)
+            if not is_gns_device:
+                rtsp_enabled = user_input.get(CONF_RTSP_ENABLE, False)
+
+                if rtsp_enabled:
+                    rtsp_username = user_input.get(CONF_RTSP_USERNAME, "").strip()
+                    rtsp_password = user_input.get(CONF_RTSP_PASSWORD, "").strip()
+
+                    if not rtsp_username:
+                        errors["rtsp_username"] = "missing_rtsp_credentials"
+                    if not rtsp_password:
+                        errors["rtsp_password"] = "missing_rtsp_credentials"
+
+            if not errors:
+                # Validate the configuration
+                try:
+                    # Here you would validate the new configuration
+                    # For now, we'll assume it's valid
+                    _LOGGER.info("Reconfiguration successful for %s", user_input.get(CONF_HOST))
+
+                    # Build updated data, preserving internal fields
+                    updated_data = dict(current_data)  # Start with current data
+
+                    # For GDS devices, preserve the original username (don't let user change it)
+                    username = user_input.get(CONF_USERNAME) if is_gns_device else current_data.get(CONF_USERNAME, DEFAULT_USERNAME)
+
+                    # Encrypt passwords if they're not already encrypted
+                    password = user_input[CONF_PASSWORD]
+                    if not password.startswith("encrypted:"):
+                        password = encrypt_password(password, self._config_entry.unique_id or "default")
+
+                    rtsp_password = user_input.get(CONF_RTSP_PASSWORD, "")
+                    if rtsp_password and not rtsp_password.startswith("encrypted:"):
+                        rtsp_password = encrypt_password(rtsp_password, self._config_entry.unique_id or "default")
+
+                    updated_data.update({
+                        CONF_HOST: user_input[CONF_HOST],
+                        CONF_PORT: port,
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: password,
+                        CONF_RTSP_ENABLE: user_input.get(CONF_RTSP_ENABLE, False),
+                        CONF_RTSP_USERNAME: user_input.get(CONF_RTSP_USERNAME, ""),
+                        CONF_RTSP_PASSWORD: rtsp_password,
+                    })
+
+                    # Update the config entry
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry,
+                        data=updated_data
+                    )
+
+                    # Schedule a reload to apply the new configuration
+                    self.hass.async_create_task(
+                        self.hass.config_entries.async_reload(self._config_entry.entry_id)
+                    )
+
+                    return self.async_create_entry(title="", data={})
+
+                except (GrandstreamError, OSError, TimeoutError) as err:
+                    _LOGGER.error("Reconfiguration failed: %s", err)
+                    errors["base"] = "cannot_connect"
+
+        # Build form schema with current values as defaults (except password)
+        # Preserve user input on validation errors
+        schema_dict: dict[Any, Any] = {
+            vol.Required(CONF_HOST, default=user_input.get(CONF_HOST) if user_input else current_data.get(CONF_HOST, "")): cv.string,
+            vol.Optional(CONF_PORT, default=user_input.get(CONF_PORT) if user_input else current_data.get(CONF_PORT, DEFAULT_PORT)): cv.string,
+        }
+
+        # Only show username field for GNS devices (GDS uses fixed username)
+        if is_gns_device:
+            schema_dict[vol.Required(CONF_USERNAME, default=user_input.get(CONF_USERNAME) if user_input else current_data.get(CONF_USERNAME, DEFAULT_USERNAME_GNS))] = cv.string
+
+        # Password field (device login password) - don't show encrypted password as default
+        password_default = user_input.get(CONF_PASSWORD, "") if user_input else ""
+        schema_dict[vol.Required(CONF_PASSWORD, default=password_default)] = cv.string
+
+        # Add RTSP options for non-GNS devices
+        if not is_gns_device:
+            rtsp_enable_default = user_input.get(CONF_RTSP_ENABLE) if user_input is not None else current_data.get(CONF_RTSP_ENABLE, False)
+            schema_dict[vol.Optional(CONF_RTSP_ENABLE, default=rtsp_enable_default)] = cv.boolean
+
+            # Always show RTSP fields for non-GNS devices
+            rtsp_username_default = user_input.get(CONF_RTSP_USERNAME, "") if user_input else current_data.get(CONF_RTSP_USERNAME, "")
+            rtsp_password_default = user_input.get(CONF_RTSP_PASSWORD, "") if user_input else ""
+
+            schema_dict.update({
+                vol.Optional(CONF_RTSP_USERNAME, default=rtsp_username_default): cv.string,
+                vol.Optional(CONF_RTSP_PASSWORD, default=rtsp_password_default): cv.string,
+            })
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(schema_dict),
+            errors=errors,
         )

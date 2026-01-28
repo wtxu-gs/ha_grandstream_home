@@ -94,13 +94,18 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          # Get the previous tag
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          # Get the previous tag (excluding the current one if it exists)
+          CURRENT_TAG="${{ needs.check-version.outputs.new_version }}"
+          
+          # Get all tags sorted by version, excluding the current tag
+          PREVIOUS_TAG=$(git tag -l --sort=-version:refname | grep -v "^$CURRENT_TAG$" | head -1)
           
           # Generate changelog based on commits since previous tag
           if [ -n "$PREVIOUS_TAG" ]; then
+            echo "Generating changelog from $PREVIOUS_TAG to HEAD"
             CHANGELOG=$(git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..HEAD)
           else
+            echo "No previous tag found, showing recent commits"
             CHANGELOG=$(git log --pretty=format:"- %s (%h)" | head -20)
           fi
           

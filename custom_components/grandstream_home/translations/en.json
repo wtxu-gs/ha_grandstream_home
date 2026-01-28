@@ -11,6 +11,8 @@
           "device_type": "Device Type"
         },
         "data_description": {
+          "host": "IP address or hostname of the device",
+          "name": "Friendly name for the device",
           "device_type": "Select device type: GDS (Access Control Device) or GNS (Network Storage)"
         }
       },
@@ -28,6 +30,7 @@
         "data_description": {
           "username": "Device Login Username",
           "password": "Device Administrator Password",
+          "port": "Port number for device communication",
           "rtsp_enable": "Enable RTSP video stream",
           "rtsp_username": "RTSP Authentication Username (optional)",
           "rtsp_password": "RTSP Authentication Password (optional)"
@@ -36,6 +39,53 @@
       "confirm": {
         "title": "Confirm Adding Device",
         "description": "Do you want to add {name} to Home Assistant?"
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Device",
+        "description": "Please enter new credentials for {host}\nDevice Type: {device_type}",
+        "data": {
+          "password": "Admin Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Connection failed",
+      "invalid_auth": "Authentication failed",
+      "unknown": "Unknown Error",
+      "missing_rtsp_credentials": "When enabling RTSP, a username and password are required.",
+      "reauth_successful": "Reauthentication successful"
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "missing_data": "Missing required data",
+      "not_grandstream_device": "Not a Grandstream device",
+      "reauth_entry_not_found": "Reauthentication entry not found",
+      "reauth_successful": "Reauthentication successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Reconfigure Device",
+        "description": "Update device configuration settings",
+        "data": {
+          "host": "IP Address",
+          "port": "Port",
+          "username": "Username",
+          "password": "Admin Password",
+          "rtsp_enable": "Enable RTSP",
+          "rtsp_username": "RTSP Username",
+          "rtsp_password": "RTSP Password"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the device",
+          "port": "Port number for device communication",
+          "username": "Device login username",
+          "password": "Device administrator password",
+          "rtsp_enable": "Enable RTSP video stream",
+          "rtsp_username": "RTSP authentication username (optional)",
+          "rtsp_password": "RTSP authentication password (optional)"
+        }
       }
     },
     "error": {
@@ -43,24 +93,38 @@
       "invalid_auth": "Authentication failed",
       "unknown": "Unknown Error",
       "missing_rtsp_credentials": "When enabling RTSP, a username and password are required."
-    },
-    "abort": {
-      "already_configured": "Device is already configured"
     }
   },
   "device_automation": {
     "trigger_type": {
-      "personnel_intrusion": "Personnel Loitering/Intrusion Alarm",
+      "personnel_intrusion": "Intrusion/Loitering Alarm",
       "hostage": "Duress Alarm",
       "tamper": "Tamper Alarm",
-      "keypad_error": "Keypad Input Error Alarm",
-      "non_scheduled_access": "Unscheduled Access Alarm",
-      "unauthorized_rfid": "Unauthorized RFID Card Access Alarm",
+      "keypad_error": "Remote Unlock Wrong Password Alarm",
+      "non_scheduled_access": "Exceeded Access Time Limit Alarm",
+      "unauthorized_rfid": "Unauthorized RFID Card/QR Code Access Alarm",
       "abnormal_sound": "Abnormal Sound Alarm",
       "high_temperature": "High Temperature Alarm",
-      "di_1": "DI 1",
-      "di_2": "DI 2",
-      "di_3": "DI 3",
+      "di_1": "Digital Input Alarm 1",
+      "di_2": "Digital Input Alarm 2",
+      "door_opened_any": "Door Opened (Any Method)",
+      "door_opened_rfid": "Door Opened by RFID Card",
+      "door_opened_sip": "Door Opened by SIP Call",
+      "door_opened_common_password": "Door Opened by Common Password",
+      "door_opened_personal_password": "Door Opened by Personal Password",
+      "door_opened_card_password": "Door Opened by Card and Password",
+      "door_opened_temp_password": "Door Opened by Temporary Password",
+      "door_opened_forced": "Door Opened by Force",
+      "door_opened_remote": "Door Opened Remotely",
+      "door_opened_http": "Door Opened by HTTP",
+      "door_opened_qrcode": "Door Opened by QR Code",
+      "door_opened_ble": "Door Opened by Bluetooth",
+      "door_opened_nfc": "Door Opened by NFC",
+      "door_opened_pin": "Door Opened by PIN Code",
+      "door_opened_guest_qrcode": "Door Opened by Guest QR Code",
+      "door_opened_touch_pass": "Door Opened by Touch Pass",
+      "phone_busy": "Phone Status Busy",
+      "phone_ringing": "Phone Status Ringing",
       "disk_error": "Disk Error/Failure",
       "disk_offline": "Disk Offline",
       "pool_degraded": "Storage Pool Degraded",
@@ -99,19 +163,67 @@
   "services": {
     "reboot_device": {
       "name": "Restart",
-      "description": "Restart."
+      "description": "Restart the device.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The device to restart."
+        }
+      }
     },
     "sleep_device": {
       "name": "Sleep",
-      "description": "Put the NAS into sleep mode."
+      "description": "Put the NAS into sleep mode.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The device to put to sleep."
+        }
+      }
     },
     "wake_device": {
       "name": "Wake Up",
-      "description": "Wake up the NAS from sleep mode."
+      "description": "Wake up the NAS from sleep mode.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The device to wake up."
+        }
+      }
     },
     "shutdown_device": {
       "name": "Shut Down",
-      "description": "Shut down the NAS."
+      "description": "Shut down the NAS.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The device to shut down."
+        }
+      }
+    },
+    "unlock_door": {
+      "name": "Unlock door",
+      "description": "Unlock a door on a GDS device using secure three-step authentication.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The GDS device to control."
+        },
+        "door_id": {
+          "name": "Door ID",
+          "description": "Which door to unlock (0=all doors, 1=door 1, 2=door 2)."
+        }
+      }
+    },
+    "reset_all_alarms": {
+      "name": "Reset all alarms",
+      "description": "Reset all alarms on a GDS device.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The GDS device to reset alarms on."
+        }
+      }
     }
   },
   "entity": {
@@ -119,10 +231,12 @@
       "reboot": { "name": "Restart" },
       "sleep": { "name": "Sleep" },
       "wake": { "name": "Wake Up" },
-      "shutdown": { "name": "Shut Down" }
+      "shutdown": { "name": "Shut Down" },
+      "reset_all_alarms": { "name": "Reset All Alarms" }
     },
     "sensor": {
       "device_status": { "name": "Device Status" },
+      "sip_registration_status": { "name": "Account {account_id}" },
       "cpu_usage": { "name": "CPU Usage" },
       "memory_used_gb": { "name": "Memory Used" },
       "memory_usage_percent": { "name": "Memory Usage" },

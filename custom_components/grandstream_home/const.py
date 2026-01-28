@@ -1,4 +1,5 @@
 """Constants for the Grandstream Home integration."""
+
 DOMAIN = "grandstream_home"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
@@ -7,6 +8,26 @@ CONF_PORT = "port"
 # Webhook configuration items
 CONF_STATUS_WEBHOOK_ID = "status_webhook_id"
 CONF_COMMAND_WEBHOOK_ID = "command_webhook_id"
+
+# Lock related constants
+CONF_DOOR_ID = "door_id"
+CONF_KEEP_UNLOCKED = "keep_unlocked"
+CONF_UNLOCK_DURATION = "unlock_duration"
+
+# Door unlock API constants
+ACCESS_TOKEN_TTL = 3300  # 55 minutes in seconds
+
+# Door unlock API error codes
+UNLOCK_CODE_SUCCESS = "0"
+UNLOCK_CODE_AUTH_FAILED = "-100"  # Invalid password or signature verification failed
+UNLOCK_CODE_MATERIAL_EMPTY = "-200"  # Material for generating token is empty
+UNLOCK_CODE_TIMESTAMP_EXPIRED = "-300"  # Timestamp expired
+UNLOCK_CODE_PERMISSION_DENIED = "-400"  # User has no permission
+UNLOCK_CODE_CHALLENGE_INVALID = "-500"  # Challenge code is invalid
+
+# Door action types
+DOOR_ACTION_UNLOCK = "1"  # Unlock/open door
+DOOR_ACTION_LOCK = "2"  # Lock/close door
 
 # RTSP configuration items
 CONF_RTSP_ENABLE = "rtsp_enable"
@@ -22,8 +43,22 @@ DEFAULT_USERNAME_GNS = "admin"
 
 # Device Types
 CONF_DEVICE_TYPE = "device_type"
+CONF_DEVICE_MODEL = "device_model"  # Original device model (GDS/GSC/GNS)
 DEVICE_TYPE_GDS = "GDS"
+DEVICE_TYPE_GSC = "GSC"
 DEVICE_TYPE_GNS_NAS = "GNS"
+
+# Device type to available actions mapping
+DEVICE_ACTIONS_MAP = {
+    "GDS": ["reboot_device"],
+    "GNS": ["reboot_device", "sleep_device", "wake_device", "shutdown_device"],
+}
+
+# SIP registration status mapping
+SIP_STATUS_MAP = {
+    0: "unregistered",
+    1: "registered",
+}
 
 # API Content Types
 CONTENT_TYPE_JSON = "application/json"
@@ -40,7 +75,7 @@ HTTP_METHOD_POST = "POST"
 
 # API Timeout Settings (seconds)
 GDS_TIMEOUT_CONNECT = 5
-GDS_TIMEOUT_READ = 10
+GDS_TIMEOUT_READ = 30  # Increased for unlock operations
 GDS_TIMEOUT_SOCKET_CHECK = 2
 
 GNS_DEFAULT_TIMEOUT = 20
