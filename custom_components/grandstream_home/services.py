@@ -45,11 +45,12 @@ class APIResolver:
                 return api
         return None
 
-    def _match_api_by_ip(self, device_mac: str) -> Any | None:
-        """Match API by IP address contained in device MAC."""
+    def _match_api_by_ip(self, ip_address: str) -> Any | None:
+        """Match API by IP address."""
         for api in self._get_all_apis():
-            if hasattr(api, "ip_address") and api.ip_address in device_mac:
-                _LOGGER.debug("Found API by IP address: %s", api.ip_address)
+            # Both GDS and GNS use host attribute
+            if hasattr(api, "host") and api.host == ip_address:
+                _LOGGER.debug("Found API by IP address: %s", ip_address)
                 return api
         return None
 

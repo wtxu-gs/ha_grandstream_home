@@ -317,22 +317,22 @@ async def async_get_condition_capabilities(
                 ): vol.All(vol.Coerce(float), vol.Range(min=0, max=100))
             }
 
-            # Add index field if multiple entities exist
+            # Add index field only if multiple entities exist
             if max_index > 1:
-                schema_fields[vol.Optional(CONF_INDEX, default=1)] = vol.All(
+                schema_fields[vol.Required(CONF_INDEX, default=1)] = vol.All(
                     vol.Coerce(int), vol.Range(min=1, max=max_index)
                 )
 
             return {"extra_fields": vol.Schema(schema_fields)}
 
-    # Status-based conditions that only need index if multiple entities exist
+    # Status-based conditions that need index only when multiple entities exist
     if condition_type in ["fan_abnormal", "disk_abnormal", "pool_abnormal"]:
         if max_index > 1:
-            # Only show index selector if there are multiple entities
+            # Show index selector as required field when multiple entities exist
             return {
                 "extra_fields": vol.Schema(
                     {
-                        vol.Optional(CONF_INDEX, default=1): vol.All(
+                        vol.Required(CONF_INDEX, default=1): vol.All(
                             vol.Coerce(int), vol.Range(min=1, max=max_index)
                         )
                     }

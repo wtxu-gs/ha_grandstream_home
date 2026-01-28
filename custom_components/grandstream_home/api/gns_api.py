@@ -376,7 +376,12 @@ class GNSNasAPI:
         self._encrypted_password = None
         _LOGGER.debug("Cleared cached credentials")
 
-    def _handle_login_failure(self, reason: str = "Unknown error", code: int | None = None, auth_failure: bool = True) -> None:
+    def _handle_login_failure(
+        self,
+        reason: str = "Unknown error",
+        code: int | None = None,
+        auth_failure: bool = True,
+    ) -> None:
         """Handle login failure by incrementing count and warning if needed.
 
         Args:
@@ -1173,6 +1178,7 @@ class GNSNasAPI:
                 sock.sendto(magic_packet, (broadcast_ip, port))
 
             _LOGGER.info("WOL magic packet sent successfully to %s", target_mac)
+            return True
         except ValueError as err:
             _LOGGER.error("Invalid MAC address for WOL: %s", err)
         except OSError as err:
