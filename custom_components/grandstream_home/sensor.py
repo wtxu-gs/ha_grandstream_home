@@ -1,4 +1,5 @@
 """Sensor platform for Grandstream integration."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,7 +12,6 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
     UnitOfDataRate,
@@ -20,9 +20,10 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
+from . import GrandstreamConfigEntry
 from .const import DEVICE_TYPE_GNS_NAS, DOMAIN
 from .coordinator import GrandstreamCoordinator
 from .device import GrandstreamDevice
@@ -44,6 +45,16 @@ DEVICE_SENSORS: tuple[GrandstreamSensorEntityDescription, ...] = (
         key_path="phone_status",
         translation_key="device_status",
         icon="mdi:account-badge",
+    ),
+)
+
+# SIP account sensors (multiple accounts supported)
+SIP_ACCOUNT_SENSORS: tuple[GrandstreamSensorEntityDescription, ...] = (
+    GrandstreamSensorEntityDescription(
+        key="sip_registration_status",
+        key_path="sip_accounts[{index}].status",
+        translation_key="sip_registration_status",
+        icon="mdi:phone-check",
     ),
 )
 
@@ -241,8 +252,9 @@ class GrandstreamSensor(SensorEntity):
         """Handle updated data from the coordinator."""
         self.async_write_ha_state()
 
-    async def async_added_to_hass(self):
+    async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
+        await super().async_added_to_hass()
         self.async_on_remove(
             self.coordinator.async_add_listener(self._handle_coordinator_update)
         )
@@ -258,11 +270,14 @@ class GrandstreamSensor(SensorEntity):
         for part in parts:
             # Handle list index like key[0]
             while "[" in part and "]" in part:
-                base = part[:part.index("[")]
-                idx_str = part[part.index("[") + 1:part.index("]")]
+                base = part[: part.index("[")]
+                idx_str = part[part.index("[") + 1 : part.index("]")]
                 if base:
                     if isinstance(cur, dict):
-                        cur = cur.get(base, None)
+                        temp = cur.get(base)
+                        if temp is None:
+                            return None
+                        cur = temp
                     else:
                         return None
                 try:
@@ -277,10 +292,13 @@ class GrandstreamSensor(SensorEntity):
                 if part.endswith("]"):
                     part = ""
                 else:
-                    part = part[part.index("]") + 1:]
+                    part = part[part.index("]") + 1 :]
             if part:
                 if isinstance(cur, dict):
-                    cur = cur.get(part, None)
+                    temp = cur.get(part)
+                    if temp is None:
+                        return None
+                    cur = temp
                 else:
                     return None
         return cur
@@ -303,9 +321,36 @@ class GrandstreamSystemSensor(GrandstreamSensor):
 class GrandstreamDeviceSensor(GrandstreamSensor):
     """Representation of a Grandstream device sensor."""
 
+    def _get_api_instance(self):
+        """Get API instance from hass.data."""
+
+        if DOMAIN in self.hass.data and hasattr(self._device, "config_entry_id"):
+            entry_data = self.hass.data[DOMAIN].get(self._device.config_entry_id)
+            if entry_data and "api" in entry_data:
+                return entry_data["api"]
+        return None
+
     @property
     def native_value(self) -> StateType:
         """Return the state of the sensor."""
+        # For phone_status sensor, check connection state first
+        if self.entity_description.key == "phone_status":
+            api = self._get_api_instance()
+            if api:
+                # Return connection status key if there's any issue
+                # Translation keys: ha_control_disabled, offline, account_locked, auth_failed
+                if (
+                    hasattr(api, "is_ha_control_enabled")
+                    and not api.is_ha_control_enabled
+                ):
+                    return "ha_control_disabled"
+                if hasattr(api, "is_online") and not api.is_online:
+                    return "offline"
+                if hasattr(api, "is_account_locked") and api.is_account_locked:
+                    return "account_locked"
+                if hasattr(api, "is_authenticated") and not api.is_authenticated:
+                    return "auth_failed"
+
         if self.entity_description.key_path and self._index is not None:
             value = self._get_by_path(
                 self.coordinator.data, self.entity_description.key_path, self._index
@@ -320,16 +365,88 @@ class GrandstreamDeviceSensor(GrandstreamSensor):
         return value
 
 
+class GrandstreamSipAccountSensor(GrandstreamSensor):
+    """Representation of a Grandstream SIP account sensor."""
+
+    def __init__(
+        self,
+        coordinator: GrandstreamCoordinator,
+        device: GrandstreamDevice,
+        description: GrandstreamSensorEntityDescription,
+        account_id: str,
+    ) -> None:
+        """Initialize the SIP account sensor."""
+        # Call parent init with index=None (will be determined dynamically)
+        super().__init__(coordinator, device, description, index=None)
+
+        # Store account_id for dynamic lookup
+        self._account_id = account_id
+
+        # Override unique ID to use account_id instead of index
+        self._attr_unique_id = f"{device.unique_id}_{description.key}_{account_id}"
+
+        # Set translation placeholders for account ID
+        self._attr_translation_placeholders = {"account_id": account_id}
+
+    def _find_account_index(self) -> int | None:
+        """Find the current index of this account in the accounts list."""
+        sip_accounts = self.coordinator.data.get("sip_accounts", [])
+        for idx, account in enumerate(sip_accounts):
+            if isinstance(account, dict) and account.get("id") == self._account_id:
+                return idx
+        return None
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        # Check if coordinator is available
+        if not self.coordinator.last_update_success:
+            return False
+
+        # Check if this account still exists by ID
+        return self._find_account_index() is not None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to hass."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self._handle_coordinator_update)
+        )
+
+    @property
+    def native_value(self) -> StateType:
+        """Return the state of the sensor."""
+        if not self.entity_description.key_path:
+            return None
+
+        # Find current index of this account
+        current_index = self._find_account_index()
+        if current_index is None:
+            return None
+
+        return self._get_by_path(
+            self.coordinator.data, self.entity_description.key_path, current_index
+        )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: GrandstreamConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up sensors from a config entry."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     device = hass.data[DOMAIN][config_entry.entry_id]["device"]
 
-    entities = []
+    entities: list[GrandstreamSensor] = []
+
+    # Track created SIP account sensors by account ID
+    created_sip_sensors: set[str] = set()
 
     if getattr(device, "device_type", None) == DEVICE_TYPE_GNS_NAS:
         # Add system sensors
@@ -366,6 +483,48 @@ async def async_setup_entry(
         entities.extend(
             GrandstreamDeviceSensor(coordinator, device, description)
             for description in DEVICE_SENSORS
+        )
+
+        # Add SIP account sensors (only if accounts exist)
+        # Track by account ID instead of index
+        sip_accounts = coordinator.data.get("sip_accounts", [])
+        for account in sip_accounts:
+            if isinstance(account, dict):
+                account_id = account.get("id", "")
+                if account_id:
+                    entities.extend(
+                        GrandstreamSipAccountSensor(
+                            coordinator, device, description, account_id
+                        )
+                        for description in SIP_ACCOUNT_SENSORS
+                    )
+                    created_sip_sensors.add(account_id)
+
+        # Add listener to dynamically add new SIP account sensors
+        @callback
+        def _async_add_sip_sensors() -> None:
+            """Add new SIP account sensors when accounts are added."""
+            sip_accounts = coordinator.data.get("sip_accounts", [])
+            new_entities: list[GrandstreamSipAccountSensor] = []
+
+            for account in sip_accounts:
+                if isinstance(account, dict):
+                    account_id = account.get("id", "")
+                    if account_id and account_id not in created_sip_sensors:
+                        new_entities.extend(
+                            GrandstreamSipAccountSensor(
+                                coordinator, device, description, account_id
+                            )
+                            for description in SIP_ACCOUNT_SENSORS
+                        )
+                        created_sip_sensors.add(account_id)
+
+            if new_entities:
+                async_add_entities(new_entities)
+
+        # Register listener
+        config_entry.async_on_unload(
+            coordinator.async_add_listener(_async_add_sip_sensors)
         )
 
     async_add_entities(entities)

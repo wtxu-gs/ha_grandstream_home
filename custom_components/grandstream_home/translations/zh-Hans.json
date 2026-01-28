@@ -1,146 +1,321 @@
 {
-  "config": {
-    "flow_title": "{name}",
-    "step": {
-      "user": {
-        "title": "添加 Grandstream 设备",
-        "description": "请输入您的设备信息",
-        "data": {
-          "host": "IP地址",
-          "name": "设备名称",
-          "device_type": "设备类型"
+    "config": {
+        "abort": {
+            "already_configured": "设备已配置",
+            "already_in_progress": "配置流程已在进行中",
+            "missing_data": "缺少必需的数据",
+            "not_grandstream_device": "不是Grandstream设备",
+            "reauth_entry_not_found": "重新认证条目未找到",
+            "reauth_successful": "重新认证成功",
+            "reconfigure_successful": "重新配置成功"
         },
-        "data_description": {
-          "device_type": "选择设备类型: GDS (门禁设备) 或 GNS (网络存储)"
-        }
-      },
-      "auth": {
-        "title": "设备认证",
-        "description": "请输入 {host} 的认证信息\n设备类型: {device_type}\n默认用户名: {username}",
-        "data": {
-          "username": "用户名",
-          "password": "管理员密码",
-          "port": "端口",
-          "rtsp_enable": "启用RTSP",
-          "rtsp_username": "RTSP用户名",
-          "rtsp_password": "RTSP密码"
+        "error": {
+            "cannot_connect": "连接失败",
+            "ha_control_disabled": "添加失败，请启用设备端 Home Assistant 相关配置",
+            "invalid_auth": "认证失败",
+            "invalid_host": "无效的 IP 地址",
+            "invalid_port": "无效的端口号",
+            "missing_rtsp_credentials": "启用 RTSP 时需要提供用户名和密码",
+            "reauth_successful": "重新认证成功",
+            "unknown": "未知错误"
         },
-        "data_description": {
-          "username": "设备登录用户名",
-          "password": "设备管理员密码",
-          "rtsp_enable": "是否启用RTSP视频流",
-          "rtsp_username": "RTSP认证用户名 (可选)",
-          "rtsp_password": "RTSP认证密码 (可选)"
+        "flow_title": "{name}",
+        "step": {
+            "auth": {
+                "data": {
+                    "password": "管理员密码",
+                    "port": "端口",
+                    "rtsp_enable": "启用RTSP",
+                    "rtsp_password": "RTSP密码",
+                    "rtsp_username": "RTSP用户名",
+                    "username": "用户名",
+                    "verify_ssl": "验证SSL证书"
+                },
+                "data_description": {
+                    "password": "设备管理员密码",
+                    "port": "设备通信端口号",
+                    "rtsp_enable": "启用RTSP视频流",
+                    "rtsp_password": "RTSP认证密码 (可选)",
+                    "rtsp_username": "RTSP认证用户名 (可选)",
+                    "username": "设备登录用户名",
+                    "verify_ssl": "启用SSL证书验证（建议用于有有效证书的设备）"
+                },
+                "description": "请输入 {host} 的认证信息\n设备型号: {device_model}\n默认用户名: {username}",
+                "title": "设备认证"
+            },
+            "confirm": {
+                "description": "您要将 {name} 添加到 Home Assistant 吗？",
+                "title": "确认添加设备"
+            },
+            "reauth_confirm": {
+                "data": {
+                    "password": "管理员密码",
+                    "username": "用户名"
+                },
+                "data_description": {
+                    "password": "设备管理员密码",
+                    "username": "设备登录用户名"
+                },
+                "description": "请为 {host} 输入新的认证信息\n设备型号: {device_model}",
+                "title": "重新认证设备"
+            },
+            "reconfigure": {
+                "data": {
+                    "host": "IP地址",
+                    "password": "管理员密码",
+                    "port": "端口",
+                    "rtsp_enable": "启用RTSP",
+                    "rtsp_password": "RTSP密码",
+                    "rtsp_username": "RTSP用户名",
+                    "username": "用户名",
+                    "verify_ssl": "验证SSL证书"
+                },
+                "data_description": {
+                    "host": "设备的IP地址或主机名",
+                    "password": "设备管理员密码",
+                    "port": "设备通信端口号",
+                    "rtsp_enable": "启用RTSP视频流",
+                    "rtsp_password": "RTSP认证密码 (可选)",
+                    "rtsp_username": "RTSP认证用户名 (可选)",
+                    "username": "设备登录用户名",
+                    "verify_ssl": "启用SSL证书验证（建议用于有有效证书的设备）"
+                },
+                "description": "更新 {name} 的配置\n设备型号: {device_model}",
+                "title": "重新配置设备"
+            },
+            "user": {
+                "data": {
+                    "device_type": "设备类型",
+                    "host": "IP地址",
+                    "name": "设备名称"
+                },
+                "data_description": {
+                    "device_type": "选择设备类型: GDS (门禁设备) 或 GNS (网络存储)",
+                    "host": "设备的IP地址或主机名",
+                    "name": "设备的友好名称"
+                },
+                "description": "请输入您的设备信息",
+                "title": "添加 Grandstream 设备"
+            }
         }
-      },
-      "confirm": {
-        "title": "确认添加设备",
-        "description": "您要将 {name} 添加到 Home Assistant 吗？"
-      }
     },
-    "error": {
-      "cannot_connect": "连接失败",
-      "invalid_auth": "认证失败",
-      "unknown": "未知错误",
-      "missing_rtsp_credentials": "启用RTSP时需要提供用户名和密码"
+    "device_automation": {
+        "action_type": {
+            "reboot_device": "设备重启",
+            "shutdown_device": "设备关机",
+            "sleep_device": "设备休眠",
+            "wake_device": "设备唤醒"
+        },
+        "condition_type": {
+            "cpu_temperature_above": "CPU温度超过阈值",
+            "cpu_usage_above": "CPU使用率超过阈值",
+            "disk_abnormal": "磁盘状态异常",
+            "disk_temperature_above": "磁盘温度超过阈值",
+            "fan_abnormal": "风扇状态异常",
+            "memory_usage_above": "内存使用率超过阈值",
+            "pool_abnormal": "存储池状态异常",
+            "pool_usage_above": "存储池使用率超过阈值",
+            "system_temperature_above": "系统温度超过阈值"
+        },
+        "trigger_type": {
+            "abnormal_sound": "异常声音报警",
+            "cpu_high_usage": "CPU使用率过高",
+            "cpu_temperature_above": "CPU温度超过阈值",
+            "cpu_usage_above": "CPU使用率超过阈值",
+            "di_1": "数字输入1报警",
+            "di_2": "数字输入2报警",
+            "di_3": "数字输入3报警",
+            "disk_abnormal": "磁盘状态异常",
+            "disk_error": "磁盘错误/故障",
+            "disk_offline": "磁盘离线",
+            "disk_temperature_above": "磁盘温度超过阈值",
+            "door_close_timeout": "关门超时报警",
+            "door_opened_any": "门被打开（任意方式）",
+            "door_opened_ble": "蓝牙开门",
+            "door_opened_card_password": "卡+密码开门",
+            "door_opened_common_password": "统一密码开门",
+            "door_opened_forced": "强制开门",
+            "door_opened_guest_qrcode": "访客二维码开门",
+            "door_opened_http": "HTTP开门",
+            "door_opened_nfc": "NFC开门",
+            "door_opened_personal_password": "个人密码开门",
+            "door_opened_pin": "PIN码开门",
+            "door_opened_qrcode": "二维码开门",
+            "door_opened_remote": "远程开门",
+            "door_opened_rfid": "刷卡开门",
+            "door_opened_sip": "SIP呼叫开门",
+            "door_opened_temp_password": "临时密码开门",
+            "door_opened_touch_pass": "Touch Pass开门",
+            "fan_abnormal": "风扇状态异常",
+            "high_temperature": "高温报警",
+            "hostage": "胁迫报警",
+            "keypad_error": "键盘多次输入错误报警",
+            "memory_high_usage": "内存使用率过高",
+            "memory_usage_above": "内存使用率超过阈值",
+            "non_scheduled_access": "超出时间表访问报警",
+            "personnel_intrusion": "人员逗留/闯入报警",
+            "phone_busy": "电话忙线",
+            "phone_ringing": "电话响铃",
+            "pool_abnormal": "存储池状态异常",
+            "pool_degraded": "存储池降级",
+            "pool_full": "存储池已满",
+            "pool_usage_above": "存储池使用率超过阈值",
+            "power_insufficient": "供电不足报警",
+            "remote_unlock_wrong_password": "远程开门密码错误报警",
+            "safe_room_alarm": "安全室报警",
+            "sd_card_formatted": "SD卡被格式化",
+            "sd_card_unavailable": "SD卡无法使用",
+            "system_high_temp": "系统温度过高",
+            "system_temperature_above": "系统温度超过阈值",
+            "tamper": "防拆报警",
+            "unauthorized_rfid": "非授权RFID卡/二维码访问报警"
+        }
     },
-    "abort": {
-      "already_configured": "设备已配置"
+    "entity": {
+        "button": {
+            "reboot": {
+                "name": "重启"
+            },
+            "reset_all_alarms": {
+                "name": "复位所有报警"
+            },
+            "shutdown": {
+                "name": "关机"
+            },
+            "sleep": {
+                "name": "休眠"
+            },
+            "wake": {
+                "name": "唤醒"
+            }
+        },
+        "sensor": {
+            "cpu_temperature": {
+                "name": "CPU温度"
+            },
+            "cpu_usage": {
+                "name": "CPU使用率"
+            },
+            "device_status": {
+                "name": "设备状态",
+                "state": {
+                    "account_locked": "账户已锁定",
+                    "auth_failed": "认证失败",
+                    "ha_control_disabled": "HA控制已禁用",
+                    "offline": "离线"
+                }
+            },
+            "disk_size": {
+                "name": "磁盘{index}大小"
+            },
+            "disk_status": {
+                "name": "磁盘{index}状态"
+            },
+            "disk_temperature": {
+                "name": "磁盘{index}温度"
+            },
+            "fan_mode": {
+                "name": "风扇模式"
+            },
+            "fan_status": {
+                "name": "风扇{index}状态"
+            },
+            "memory_usage_percent": {
+                "name": "内存使用率"
+            },
+            "memory_used_gb": {
+                "name": "内存使用量"
+            },
+            "network_download_speed": {
+                "name": "网络下载速率"
+            },
+            "network_upload_speed": {
+                "name": "网络上传速率"
+            },
+            "pool_size": {
+                "name": "存储池{index}大小"
+            },
+            "pool_status": {
+                "name": "存储池{index}状态"
+            },
+            "pool_usage": {
+                "name": "存储池{index}使用率"
+            },
+            "sip_registration_status": {
+                "name": "账号{account_id}"
+            },
+            "system_temperature": {
+                "name": "系统温度"
+            },
+            "system_uptime": {
+                "name": "系统运行时间"
+            }
+        }
+    },
+    "services": {
+        "reboot_device": {
+            "description": "重启设备。",
+            "fields": {
+                "device_id": {
+                    "description": "要重启的设备。",
+                    "name": "设备"
+                }
+            },
+            "name": "重启"
+        },
+        "reset_all_alarms": {
+            "description": "复位GDS设备上的所有报警。",
+            "fields": {
+                "device_id": {
+                    "description": "要复位报警的GDS设备。",
+                    "name": "设备"
+                }
+            },
+            "name": "复位所有报警"
+        },
+        "shutdown_device": {
+            "description": "关闭NAS设备。",
+            "fields": {
+                "device_id": {
+                    "description": "要关闭的设备。",
+                    "name": "设备"
+                }
+            },
+            "name": "关机"
+        },
+        "sleep_device": {
+            "description": "将NAS设备进入休眠模式。",
+            "fields": {
+                "device_id": {
+                    "description": "要进入休眠的设备。",
+                    "name": "设备"
+                }
+            },
+            "name": "休眠"
+        },
+        "unlock_door": {
+            "description": "使用安全三步认证解锁GDS设备的门。",
+            "fields": {
+                "device_id": {
+                    "description": "要控制的GDS设备。",
+                    "name": "设备"
+                },
+                "door_id": {
+                    "description": "要解锁的门 (0=所有门, 1=门1, 2=门2)。",
+                    "name": "门ID"
+                }
+            },
+            "name": "开门"
+        },
+        "wake_device": {
+            "description": "将NAS设备从休眠模式唤醒。",
+            "fields": {
+                "device_id": {
+                    "description": "要唤醒的设备。",
+                    "name": "设备"
+                }
+            },
+            "name": "唤醒"
+        }
     }
-  },
-  "device_automation": {
-    "trigger_type": {
-      "personnel_intrusion": "人员滞留/入侵报警",
-      "hostage": "胁迫报警",
-      "tamper": "防拆报警",
-      "keypad_error": "键盘输入错误报警",
-      "non_scheduled_access": "非计划访问报警",
-      "unauthorized_rfid": "未授权RFID卡访问报警",
-      "abnormal_sound": "异常声音报警",
-      "high_temperature": "高温报警",
-      "di_1": "DI 1",
-      "di_2": "DI 2",
-      "di_3": "DI 3",
-      "disk_error": "磁盘错误/故障",
-      "disk_offline": "磁盘离线",
-      "pool_degraded": "存储池降级",
-      "pool_full": "存储池已满",
-      "fan_abnormal": "风扇状态异常",
-      "system_high_temp": "系统温度过高",
-      "cpu_high_usage": "CPU使用率过高",
-      "memory_high_usage": "内存使用率过高",
-      "cpu_usage_above": "CPU使用率超过阈值",
-      "memory_usage_above": "内存使用率超过阈值",
-      "system_temperature_above": "系统温度超过阈值",
-      "cpu_temperature_above": "CPU温度超过阈值",
-      "disk_temperature_above": "磁盘温度超过阈值",
-      "pool_usage_above": "存储池使用率超过阈值",
-      "disk_abnormal": "磁盘状态异常",
-      "pool_abnormal": "存储池状态异常"
-    },
-    "action_type": {
-      "reboot_device": "设备重启",
-      "sleep_device": "设备休眠",
-      "wake_device": "设备唤醒",
-      "shutdown_device": "设备关机"
-    },
-    "condition_type": {
-      "cpu_usage_above": "CPU使用率超过阈值",
-      "memory_usage_above": "内存使用率超过阈值",
-      "disk_temperature_above": "磁盘温度超过阈值",
-      "cpu_temperature_above": "CPU温度超过阈值",
-      "system_temperature_above": "系统温度超过阈值",
-      "pool_usage_above": "存储池使用率超过阈值",
-      "fan_abnormal": "风扇状态异常",
-      "disk_abnormal": "磁盘状态异常",
-      "pool_abnormal": "存储池状态异常"
-    }
-  },
-  "services": {
-    "reboot_device": {
-      "name": "设备重启",
-      "description": "设备重启。"
-    },
-
-    "sleep_device": {
-      "name": "设备休眠",
-      "description": "将NAS设备进入休眠模式。"
-    },
-    "wake_device": {
-      "name": "设备唤醒",
-      "description": "将NAS设备从休眠模式唤醒。"
-    },
-    "shutdown_device": {
-      "name": "设备关机",
-      "description": "关闭NAS设备。"
-    }
-  },
-  "entity": {
-    "button": {
-      "reboot": { "name": "重启" },
-      "sleep": { "name": "休眠" },
-      "wake": { "name": "唤醒" },
-      "shutdown": { "name": "关机" }
-    },
-    "sensor": {
-      "device_status": { "name": "设备状态" },
-      "cpu_usage": { "name": "CPU使用率" },
-      "memory_used_gb": { "name": "内存使用量" },
-      "memory_usage_percent": { "name": "内存使用率" },
-      "system_temperature": { "name": "系统温度" },
-      "cpu_temperature": { "name": "CPU温度" },
-      "system_uptime": { "name": "系统运行时间" },
-      "network_upload_speed": { "name": "网络上传速率" },
-      "network_download_speed": { "name": "网络下载速率" },
-      "fan_mode": { "name": "风扇模式" },
-      "fan_status": { "name": "风扇{index}状态" },
-      "disk_temperature": { "name": "磁盘{index}温度" },
-      "disk_status": { "name": "磁盘{index}状态" },
-      "disk_size": { "name": "磁盘{index}大小" },
-
-      "pool_size": { "name": "存储池{index}大小" },
-      "pool_usage": { "name": "存储池{index}使用率" },
-      "pool_status": { "name": "存储池{index}状态" }
-    }
-  }
 }

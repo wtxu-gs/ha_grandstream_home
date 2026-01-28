@@ -17,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 class APIResolver:
     """Helper class to resolve API instances for service calls."""
 
-    def __init__(self, hass: HomeAssistant):
+    def __init__(self, hass: HomeAssistant) -> None:
         """Initialize API resolver."""
         self.hass = hass
         self._device_matcher = DeviceMatcher(hass)
@@ -45,11 +45,12 @@ class APIResolver:
                 return api
         return None
 
-    def _match_api_by_ip(self, device_mac: str) -> Any | None:
-        """Match API by IP address contained in device MAC."""
+    def _match_api_by_ip(self, ip_address: str) -> Any | None:
+        """Match API by IP address."""
         for api in self._get_all_apis():
-            if hasattr(api, "ip_address") and api.ip_address in device_mac:
-                _LOGGER.debug("Found API by IP address: %s", api.ip_address)
+            # Both GDS and GNS use host attribute
+            if hasattr(api, "host") and api.host == ip_address:
+                _LOGGER.debug("Found API by IP address: %s", ip_address)
                 return api
         return None
 
@@ -90,10 +91,16 @@ class APIResolver:
                 device_name_upper = device_name.upper()
                 api_type_upper = api.device_type.upper()
 
-                if DEVICE_TYPE_GDS in device_name_upper and DEVICE_TYPE_GDS in api_type_upper:
+                if (
+                    DEVICE_TYPE_GDS in device_name_upper
+                    and DEVICE_TYPE_GDS in api_type_upper
+                ):
                     _LOGGER.debug("Found API by GDS keyword match")
                     return api
-                if DEVICE_TYPE_GNS_NAS in device_name_upper and DEVICE_TYPE_GNS_NAS in api_type_upper:
+                if (
+                    DEVICE_TYPE_GNS_NAS in device_name_upper
+                    and DEVICE_TYPE_GNS_NAS in api_type_upper
+                ):
                     _LOGGER.debug("Found API by GNS keyword match")
                     return api
         return None
@@ -101,7 +108,7 @@ class APIResolver:
     def _match_api_by_device(
         self,
         device: Any,
-        device_unique_id: str,
+        device_unique_id: str,  # pylint: disable=unused-argument
     ) -> Any | None:
         """Match API by device registry information (MAC, IP, unique_id).
 
@@ -111,6 +118,7 @@ class APIResolver:
 
         Returns:
             Matched API instance or None
+
         """
         # Extract MAC and IP from device connections
         device_mac = None
@@ -152,6 +160,7 @@ class APIResolver:
 
         Returns:
             API instance or None
+
         """
         if DOMAIN not in self.hass.data:
             _LOGGER.error("Integration %s not initialized", DOMAIN)
@@ -164,17 +173,15 @@ class APIResolver:
 
         # If no device_id specified, return first available API
         if not device_id:
-            if apis:
-                api = apis[0]
-                api_mac = getattr(api, "device_mac", "unknown")
-                api_ip = getattr(api, "ip_address", "unknown")
-                _LOGGER.debug(
-                    "No device ID specified, using first available API: MAC=%s, IP=%s",
-                    api_mac,
-                    api_ip,
-                )
-                return api
-            return None
+            api = apis[0]
+            api_mac = getattr(api, "device_mac", "unknown")
+            api_ip = getattr(api, "ip_address", "unknown")
+            _LOGGER.debug(
+                "No device ID specified, using first available API: MAC=%s, IP=%s",
+                api_mac,
+                api_ip,
+            )
+            return api
 
         # Log all available APIs for debugging
         _LOGGER.debug("Available API instances: %d", len(apis))
@@ -231,7 +238,7 @@ class APIResolver:
 
         # Try different matching strategies in order
         matchers = [
-            lambda: self._match_api_by_device_name(device.name),
+            lambda: self._match_api_by_device_name(device.name or ""),
             lambda: self._match_api_by_device_type(device.model, device.name),
         ]
 
@@ -249,9 +256,19 @@ class APIResolver:
 
 
 # Service data validation schemas
+UNLOCK_DOOR_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): cv.string,
+        vol.Optional("door_id", default=0): vol.All(
+            vol.Coerce(int),
+            vol.In([0, 1, 2]),
+        ),
+    }
+)
+
 SIMPLE_DEVICE_SCHEMA = vol.Schema(
     {
-        vol.Optional("device_id"): cv.string,
+        vol.Required("device_id"): cv.string,
     }
 )
 
@@ -265,12 +282,13 @@ async def async_setup_services(hass: HomeAssistant) -> bool:
         method_name: str,
         *args,
     ) -> None:
-        """Generic helper to call API methods.
+        """Call API methods.
 
         Args:
             call: Service call data
             method_name: Name of API method to call
             *args: Additional arguments to pass to method
+
         """
         device_id = call.data.get("device_id")
         api = api_resolver.get_api_for_device(device_id)
@@ -296,8 +314,68 @@ async def async_setup_services(hass: HomeAssistant) -> bool:
             method = getattr(api, method_name)
             await hass.async_add_executor_job(method, *args)
             _LOGGER.info("%s command sent successfully", method_name)
-        except Exception as err:
+        except (ConnectionError, TimeoutError, ValueError, RuntimeError) as err:
             _LOGGER.exception("Failed to execute %s", method_name, exc_info=err)
+
+    async def async_unlock_door(call: ServiceCall) -> None:
+        """Handle unlock door service."""
+        device_id = call.data["device_id"]
+        door_id = call.data.get("door_id", 0)
+
+        api = api_resolver.get_api_for_device(device_id)
+
+        if not api:
+            _LOGGER.error("No API instance found for device: %s", device_id)
+            return
+
+        # Verify device supports unlock_door
+        if not hasattr(api, "unlock_door"):
+            _LOGGER.error(
+                "Device does not support unlock_door (API type: %s)",
+                type(api).__name__,
+            )
+            return
+
+        _LOGGER.info("Unlocking door: device=%s, door_id=%s", device_id, door_id)
+        result = await hass.async_add_executor_job(api.unlock_door, door_id)
+
+        # Validate result is a dict
+        if not isinstance(result, dict):
+            _LOGGER.error(
+                "Unexpected response from unlock_door API for device %s: %r",
+                device_id,
+                result,
+            )
+            return
+
+        # Check APIResponse format: {"response": "success"/"error", "body": ...}
+        if result.get("response") == "success":
+            body = result.get("body", {})
+
+            # Fire event on success
+            hass.bus.async_fire(
+                "grandstream_home_door_unlocked",
+                {
+                    "device_id": device_id,
+                    "door_id": door_id,
+                    "delay_resp_time": body.get("delay_resp_time"),
+                    "hold_time": body.get("hold_time"),
+                },
+            )
+
+            _LOGGER.info(
+                "Door unlocked successfully: device=%s, door=%s",
+                device_id,
+                door_id,
+            )
+        else:
+            error_msg = result.get("body", "Unknown error")
+            _LOGGER.error(
+                "Failed to unlock door: device=%s, door=%s, error=%s",
+                device_id,
+                door_id,
+                error_msg,
+            )
 
     async def async_reboot_device(call: ServiceCall) -> None:
         """Handle reboot device service."""
@@ -315,12 +393,18 @@ async def async_setup_services(hass: HomeAssistant) -> bool:
         """Handle NAS shutdown service."""
         await _call_api_method(call, "shutdown_device")
 
+    async def async_reset_all_alarms(call: ServiceCall) -> None:
+        """Handle reset all alarms service."""
+        await _call_api_method(call, "reset_all_alarms")
+
     # Service registration mapping
     services = {
+        "unlock_door": (async_unlock_door, UNLOCK_DOOR_SCHEMA),
         "reboot_device": (async_reboot_device, SIMPLE_DEVICE_SCHEMA),
         "sleep_device": (async_sleep_device, SIMPLE_DEVICE_SCHEMA),
         "wake_device": (async_wake_device, SIMPLE_DEVICE_SCHEMA),
         "shutdown_device": (async_shutdown_device, SIMPLE_DEVICE_SCHEMA),
+        "reset_all_alarms": (async_reset_all_alarms, SIMPLE_DEVICE_SCHEMA),
     }
 
     # Register all services

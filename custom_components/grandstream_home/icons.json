@@ -1,0 +1,22 @@
+{
+  "services": {
+    "reboot_device": {
+      "service": "mdi:restart"
+    },
+    "reset_all_alarms": {
+      "service": "mdi:alarm-light-off"
+    },
+    "shutdown_device": {
+      "service": "mdi:power"
+    },
+    "sleep_device": {
+      "service": "mdi:sleep"
+    },
+    "unlock_door": {
+      "service": "mdi:lock-open"
+    },
+    "wake_device": {
+      "service": "mdi:eye"
+    }
+  }
+}

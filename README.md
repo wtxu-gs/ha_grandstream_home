@@ -10,20 +10,21 @@ and monitoring of your Grandstream devices directly through Home Assistant.
 
 ### Device Support
 
-- **GDS372X**: Real-time status monitoring, call status detection, device control
+- **GDS372X/GSC356X**: Real-time status monitoring, call status detection, device control, door lock functionality
 - **GNS5004E/GNS5004R**: Storage monitoring, system performance monitoring, temperature detection, device control
 
 ### Monitoring Metrics
 
-- **GDS Devices**: Phone status, available accounts, call status, ringing status
+- **GDS/GSC Devices**: Phone status, available accounts, call status, ringing status
 - **GNS Devices**: CPU usage, memory usage, storage pool status, disk health status, network traffic,
   temperature monitoring
 
 ### Device Control
 
-- **Reboot Device**: Support for GDS and GNS device reboot
+- **Reboot Device**: Support for GDS/GSC and GNS device reboot
 - **Power Management**: GNS device sleep, wake, shutdown functions
-- **Camera Support**: GDS device RTSP streaming and snapshot functionality
+- **Camera Support**: GDS/GSC device RTSP streaming and snapshot functionality
+- **Door Lock Control**: GDS/GSC device door lock and unlock operations
 
 ### Integration Features
 
@@ -135,7 +136,7 @@ If automatic discovery doesn't work properly, you can manually configure devices
 
 ## Entities and Sensors
 
-### GDS Device Sensors
+### GDS/GSC Device Sensors
 
 - **Phone Status**: Displays current device status
   - `unknown` - Unknown
@@ -157,9 +158,9 @@ If automatic discovery doesn't work properly, you can manually configure devices
 
 ## Button Controls
 
-### GDS Device Buttons
+### GDS/GSC Device Buttons
 
-- **Reboot Device**: Reboot GDS device
+- **Reboot Device**: Reboot GDS/GSC device
 
 ### GNS Device Buttons
 
@@ -168,9 +169,17 @@ If automatic discovery doesn't work properly, you can manually configure devices
 - **Wake Device**: Wake GNS from sleep state
 - **Shutdown Device**: Safely shutdown GNS
 
+## Lock Controls
+
+### GDS/GSC Device Locks
+
+- **Door 1 Lock**: Control and monitor Door 1 lock status
+- **Door 2 Lock**: Control and monitor Door 2 lock status
+- **Auto-lock**: Automatic re-lock after unlock (timing controlled by device)
+
 ## Camera Support
 
-### GDS Camera Functionality
+### GDS/GSC Camera Functionality
 
 - **RTSP Streaming**
 - **Snapshot Functionality**
@@ -181,12 +190,13 @@ The integration provides the following services:
 
 ### Grandstream Home Services
 
+- `grandstream_home.unlock_door`: Unlock a specific door on GDS/GSC devices
 - `grandstream_home.reboot_device`: Reboot a Grandstream device
 - `grandstream_home.sleep_device`: Put a GNS device to sleep
 - `grandstream_home.wake_device`: Wake up a sleeping GNS device
 - `grandstream_home.shutdown_device`: Shutdown a GNS device
 
-### Camera Functionality (for GDS devices)
+### Camera Functionality (for GDS/GSC devices)
 
 The integration provides FFmpeg-based RTSP streaming support, mainly for image capture and streaming display
 

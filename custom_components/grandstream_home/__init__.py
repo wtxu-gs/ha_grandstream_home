@@ -5,21 +5,28 @@ import logging
 import socket
 from typing import Any
 
+from homeassistant.components import webhook
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 
-from .api.gds_api import GDSPhoneAPI
-from .api.gns_api import GNSNasAPI
+from .api import GDSPhoneAPI, GNSNasAPI
 from .const import (
     CONF_COMMAND_WEBHOOK_ID,
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_TYPE,
+    CONF_FIRMWARE_VERSION,
     CONF_PASSWORD,
+    CONF_PORT,
+    CONF_PRODUCT_MODEL,
+    CONF_RTSP_PASSWORD,
+    CONF_RTSP_USERNAME,
     CONF_STATUS_WEBHOOK_ID,
     CONF_USE_HTTPS,
     CONF_USERNAME,
+    CONF_VERIFY_SSL,
     DEFAULT_HTTP_PORT,
     DEFAULT_HTTPS_PORT,
     DEFAULT_PORT,
@@ -29,13 +36,16 @@ from .const import (
 )
 from .coordinator import GrandstreamCoordinator
 from .device import GDSDevice, GNSNASDevice
+from .error import GrandstreamHAControlDisabledError
 from .receiver import GsWebhookCommandReceiver, GsWebhookStatusReceiver
 from .services import async_setup_services
-from .utils import generate_unique_id
+from .utils import decrypt_password, generate_unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.BUTTON, Platform.CAMERA]
+PLATFORMS = [Platform.BUTTON, Platform.CAMERA, Platform.LOCK, Platform.SENSOR]
+
+type GrandstreamConfigEntry = ConfigEntry[dict[str, Any]]
 
 # Device type mapping to API classes
 DEVICE_API_MAPPING = {
@@ -76,7 +86,7 @@ def _try_get_local_ip_url(hass: HomeAssistant) -> str:
 
         # Use configured URL scheme if available, default to http
         scheme = _get_url_scheme(hass)
-        port = hass.config.api.port or DEFAULT_PORT
+        port = hass.config.api.port if hass.config.api else DEFAULT_PORT
 
         ha_url = f"{scheme}://{ha_ip}:{port}"
         _LOGGER.info("Using local network IP: %s", ha_url)
@@ -90,7 +100,7 @@ def _get_fallback_ha_url(hass: HomeAssistant, entry: ConfigEntry) -> str:
     """Get fallback Home Assistant URL using device network IP or default configuration."""
     # Use configured URL scheme if available, default to http
     scheme = _get_url_scheme(hass)
-    port = hass.config.api.port or DEFAULT_PORT
+    port = hass.config.api.port if hass.config.api else DEFAULT_PORT
     device_ip = entry.data.get(CONF_HOST)
 
     if device_ip:
@@ -104,7 +114,7 @@ def _get_fallback_ha_url(hass: HomeAssistant, entry: ConfigEntry) -> str:
             return ha_url
 
     # Default fallback
-    ha_url = f"{scheme}://{hass.config.api.host or 'localhost'}:{port}"
+    ha_url = f"{scheme}://{hass.config.api.host if hass.config.api and hass.config.api.host else 'localhost'}:{port}"
     _LOGGER.warning("Using default API config IP: %s", ha_url)
     return ha_url
 
@@ -122,7 +132,7 @@ def _get_url_scheme(hass: HomeAssistant) -> str:
 
     # Default to http for local development, https for production
     # This is a simple heuristic - in production, Home Assistant typically uses https
-    return "https" if hass.config.api.port == 443 else "http"
+    return "https" if hass.config.api and hass.config.api.port == 443 else "http"
 
 
 async def _setup_api(hass: HomeAssistant, entry: ConfigEntry) -> Any:
@@ -135,34 +145,66 @@ async def _setup_api(hass: HomeAssistant, entry: ConfigEntry) -> Any:
     # Create API instance based on device type
     api = _create_api_instance(api_class, device_type, entry)
 
-    # Store API instance
+    # Initialize global API lock if not exists
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"api": api}
-
-    # Initialize API lock if not exists
-    if not hasattr(hass.data[DOMAIN], "api_lock"):
+    if "api_lock" not in hass.data[DOMAIN]:
         hass.data[DOMAIN]["api_lock"] = asyncio.Lock()
 
     # Attempt login with error handling
-    await _attempt_api_login(hass, api)
+    try:
+        await _attempt_api_login(hass, api)
+    except GrandstreamHAControlDisabledError as e:
+        _LOGGER.error("HA control disabled during API setup: %s", e)
+        raise ConfigEntryAuthFailed(
+            "Home Assistant control is disabled on the device"
+        ) from e
 
     return api
 
 
 def _create_api_instance(api_class, device_type: str, entry: ConfigEntry) -> Any:
     """Create API instance based on device type."""
-    if device_type == DEVICE_TYPE_GDS:
-        return api_class(entry=entry)
-
-    # For GNS NAS and other types, use direct parameters
     host = entry.data.get(CONF_HOST, "")
     username = entry.data.get(CONF_USERNAME, "")
-    password = entry.data.get(CONF_PASSWORD, "")
+    encrypted_password = entry.data.get(CONF_PASSWORD, "")
+    password = decrypt_password(encrypted_password, entry.unique_id or "default")
+    use_https = entry.data.get(CONF_USE_HTTPS, True)
+    verify_ssl = entry.data.get(CONF_VERIFY_SSL, False)
+
+    if device_type == DEVICE_TYPE_GDS:
+        port = entry.data.get(CONF_PORT, DEFAULT_PORT)
+
+        rtsp_username = entry.data.get(CONF_RTSP_USERNAME)
+        encrypted_rtsp_password = entry.data.get(CONF_RTSP_PASSWORD)
+        rtsp_password = None
+        if encrypted_rtsp_password:
+            rtsp_password = decrypt_password(
+                encrypted_rtsp_password, entry.unique_id or "default"
+            )
+            _LOGGER.debug("RTSP password decrypted for device %s", entry.unique_id)
+
+        return api_class(
+            host=host,
+            username=username,
+            password=password,
+            port=port,
+            rtsp_username=rtsp_username,
+            rtsp_password=rtsp_password,
+            verify_ssl=verify_ssl,
+        )
 
     if device_type == DEVICE_TYPE_GNS_NAS:
-        use_https = entry.data.get(CONF_USE_HTTPS, True)
-        port = entry.data.get("port", DEFAULT_HTTPS_PORT if use_https else DEFAULT_HTTP_PORT)
-        return api_class(host, username, password, port=port, use_https=use_https)
+        port = entry.data.get(
+            CONF_PORT, DEFAULT_HTTPS_PORT if use_https else DEFAULT_HTTP_PORT
+        )
+        return api_class(
+            host,
+            username,
+            password,
+            port=port,
+            use_https=use_https,
+            verify_ssl=verify_ssl,
+        )
 
     # Default fallback
     return api_class(host, username, password)
@@ -174,14 +216,48 @@ async def _attempt_api_login(hass: HomeAssistant, api: Any) -> None:
         try:
             success = await hass.async_add_executor_job(api.login)
             if not success:
-                _LOGGER.warning(
-                    "Initial login failed (device may be offline), integration will continue to load"
-                )
+                # Check if HA control is disabled on device
+                if (
+                    hasattr(api, "is_ha_control_enabled")
+                    and not api.is_ha_control_enabled
+                ):
+                    _raise_ha_control_disabled()
+
+                # Check if account is locked (temporary condition)
+                if hasattr(api, "_account_locked") and getattr(
+                    api, "_account_locked", False
+                ):
+                    _LOGGER.warning(
+                        "Account is temporarily locked, integration will retry later"
+                    )
+                    return  # Don't raise auth failed for temporary locks
+
+                _raise_auth_failed()
+        except GrandstreamHAControlDisabledError as e:
+            _LOGGER.error("Caught GrandstreamHAControlDisabledError: %s", e)
+            _raise_ha_control_disabled()
+        except ConfigEntryAuthFailed:
+            raise  # Re-raise auth failures
         except (ImportError, AttributeError, ValueError) as e:
             _LOGGER.warning(
                 "API setup encountered error (device may be offline): %s, integration will continue to load",
                 e,
             )
+
+
+def _raise_auth_failed() -> None:
+    """Raise authentication failed exception."""
+    _LOGGER.error("Authentication failed - invalid credentials")
+    raise ConfigEntryAuthFailed("Authentication failed - invalid credentials")
+
+
+def _raise_ha_control_disabled() -> None:
+    """Raise HA control disabled exception."""
+    _LOGGER.error("Home Assistant control is disabled on the device")
+    raise ConfigEntryAuthFailed(
+        "Home Assistant control is disabled on the device. "
+        "Please enable it in the device web interface."
+    )
 
 
 async def _setup_device(
@@ -199,16 +275,20 @@ async def _setup_device(
     }
 
     # Get API instance for MAC address retrieval
-    api = hass.data[DOMAIN][entry.entry_id].get("api")
+    api = entry.runtime_data.get("api")
 
     # Extract MAC address from API if available
     mac_address = _extract_mac_address(api)
     _LOGGER.debug("Extracted MAC address: %s", mac_address)
 
-    # Generate unique ID using global function
-    unique_id = generate_unique_id(
-        device_info["name"], device_type, device_info["host"], device_info["port"]
-    )
+    # Use config entry's unique_id (set during config flow, may be MAC-based)
+    # This ensures consistency between config entry and device
+    unique_id = entry.unique_id
+    if not unique_id:
+        # Fallback: generate unique_id from device info (should not happen)
+        unique_id = generate_unique_id(
+            device_info["name"], device_type, device_info["host"], device_info["port"]
+        )
     _LOGGER.info(
         "Device unique ID: %s, name: %s, type: %s",
         unique_id,
@@ -219,12 +299,18 @@ async def _setup_device(
     # Handle existing device
     await _handle_existing_device(hass, unique_id, device_info["name"], device_type)
 
+    # Get device_model and product_model from config entry
+    device_model = entry.data.get(CONF_DEVICE_MODEL, device_type)
+    product_model = entry.data.get(CONF_PRODUCT_MODEL)
+
     # Create device instance
     device = device_class(
         hass=hass,
         name=device_info["name"],
         unique_id=unique_id,
         config_entry_id=entry.entry_id,
+        device_model=device_model,
+        product_model=product_model,
     )
 
     # Set device network information
@@ -247,7 +333,7 @@ async def _handle_existing_device(
     hass: HomeAssistant, unique_id: str, name: str, device_type: str
 ) -> None:
     """Check and update existing device if found."""
-    device_registry = async_get_device_registry(hass)
+    device_registry = dr.async_get(hass)
 
     for dev in device_registry.devices.values():
         for identifier in dev.identifiers:
@@ -260,7 +346,6 @@ async def _handle_existing_device(
                     name=name,
                     manufacturer="Grandstream",
                     model=device_type,
-                    suggested_area="Entry",
                 )
                 return
 
@@ -283,7 +368,7 @@ def _set_device_network_info(
         device.set_mac_address(api.device_mac)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: GrandstreamConfigEntry) -> bool:
     """Set up Grandstream Home integration."""
     try:
         _LOGGER.debug("Starting integration initialization: %s", entry.entry_id)
@@ -294,6 +379,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # 1. Set up API
         api = await _setup_api_with_error_handling(hass, entry, device_type)
 
+        # Store API in runtime_data (required for Bronze quality scale)
+        entry.runtime_data = {"api": api}
+
         # 2. Create device instance
         device = await _setup_device(hass, entry, device_type)
         _LOGGER.debug(
@@ -302,29 +390,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device.unique_id,
         )
 
-        # 3. Create coordinator
+        # 3. Initialize data storage
+        hass.data.setdefault(DOMAIN, {})
+        hass.data[DOMAIN][entry.entry_id] = {}
+
+        # 4. Create coordinator
         coordinator = await _setup_coordinator(hass, device_type, entry)
 
-        # 4. Update stored data
+        # 5. Update stored data
         await _update_stored_data(hass, entry, coordinator, device, device_type)
 
-        # 5. Set up platforms, services, and data receivers
+        # 6. Set up platforms, services, and data receivers
         await _setup_platforms(hass, entry)
-        await async_setup_services(hass)
+
+        # Guard service registration so it only happens once per Home Assistant instance
+        if not hass.data[DOMAIN].get("services_setup"):
+            await async_setup_services(hass)
+            hass.data[DOMAIN]["services_setup"] = True
+
         await _set_data_receiver(hass, coordinator, entry)
 
-        # 6. Set up device configuration
+        # 7. Set up device configuration
         ha_url = await _get_ha_url(hass, entry)
         if api:
             api.ha_ip_address = ha_url
 
-        # 7. Configure GDS devices
+        # 8. Configure GDS devices
         await _configure_gds_device(hass, api, device_type, entry, ha_url)
 
-        # 8. Update device information from API (for GNS devices)
-        await _update_device_info_from_api(hass, api, device_type, device)
+        # 9. Update device information from API (for GNS devices)
+        discovery_version = entry.data.get(CONF_FIRMWARE_VERSION)
+        await _update_device_info_from_api(
+            hass, api, device_type, device, discovery_version
+        )
 
         _LOGGER.info("Integration initialization completed")
+    except ConfigEntryAuthFailed:
+        raise  # Let auth failures propagate to trigger reauth flow
     except Exception as e:
         _LOGGER.exception("Error setting up integration")
         raise ConfigEntryNotReady("Integration setup failed") from e
@@ -337,7 +439,15 @@ async def _setup_api_with_error_handling(
     """Set up API with error handling."""
     _LOGGER.debug("Starting API setup")
     try:
+        # Authentication is handled in _attempt_api_login, just pass through any exceptions
         api = await _setup_api(hass, entry)
+    except GrandstreamHAControlDisabledError as e:
+        _LOGGER.error("HA control disabled: %s", e)
+        raise ConfigEntryAuthFailed(
+            "Home Assistant control is disabled on the device"
+        ) from e
+    except ConfigEntryAuthFailed:
+        raise  # Re-raise auth failures
     except (ImportError, AttributeError, ValueError) as e:
         _LOGGER.exception("Error during API setup")
         raise ConfigEntryNotReady(f"API setup failed: {e}") from e
@@ -351,7 +461,7 @@ async def _setup_coordinator(
 ) -> Any:
     """Set up data coordinator."""
     _LOGGER.debug("Starting coordinator creation")
-    coordinator = GrandstreamCoordinator(hass, device_type, entry.entry_id)
+    coordinator = GrandstreamCoordinator(hass, device_type, entry)
     await coordinator.async_config_entry_first_refresh()
     _LOGGER.debug("Coordinator initialization completed")
     return coordinator
@@ -367,11 +477,23 @@ async def _update_stored_data(
     """Update stored data in hass.data."""
     _LOGGER.debug("Starting data storage update")
     try:
+        # Get API from runtime_data
+        api = entry.runtime_data.get("api") if entry.runtime_data else None
+
+        # Get device_model from entry.data (stores original model: GDS/GSC/GNS)
+        device_model = entry.data.get(CONF_DEVICE_MODEL, device_type)
+
+        # Get product_model from entry.data (specific model: GDS3725, GDS3727, GSC3560)
+        product_model = entry.data.get(CONF_PRODUCT_MODEL)
+
         hass.data[DOMAIN][entry.entry_id].update(
             {
+                "api": api,
                 "coordinator": coordinator,
                 "device": device,
                 "device_type": device_type,
+                "device_model": device_model,
+                "product_model": product_model,
             }
         )
         _LOGGER.debug("Data storage update successful")
@@ -404,7 +526,7 @@ async def _configure_gds_device(
 
 def _build_webhook_config(
     hass: HomeAssistant, entry: ConfigEntry, ha_url: str
-) -> dict[str, str]:
+) -> dict[str, str | dict[str, str]]:
     """Build webhook configuration dictionary."""
     status_webhook_id = entry.data.get(CONF_STATUS_WEBHOOK_ID)
     command_webhook_id = entry.data.get(CONF_COMMAND_WEBHOOK_ID)
@@ -449,7 +571,10 @@ async def _ensure_device_info(hass: HomeAssistant, api: Any) -> None:
 
 
 async def _send_gds_device_config(
-    hass: HomeAssistant, api: Any, webhook_config: dict[str, str], entry: ConfigEntry
+    hass: HomeAssistant,
+    api: Any,
+    webhook_config: dict[str, str | dict[str, str]],
+    entry: ConfigEntry,
 ) -> None:
     """Send configuration to GDS device."""
     async with hass.data[DOMAIN]["api_lock"]:
@@ -470,7 +595,11 @@ async def _send_gds_device_config(
 
 
 async def _update_device_info_from_api(
-    hass: HomeAssistant, api: Any, device_type: str, device: Any
+    hass: HomeAssistant,
+    api: Any,
+    device_type: str,
+    device: Any,
+    discovery_version: str | None = None,
 ) -> None:
     """Update device information from API for GNS devices."""
     if (
@@ -478,6 +607,9 @@ async def _update_device_info_from_api(
         or not api
         or not hasattr(api, "get_system_info")
     ):
+        # For GDS devices, just set discovery version if available
+        if discovery_version:
+            device.set_firmware_version(discovery_version)
         return
 
     try:
@@ -491,7 +623,7 @@ async def _update_device_info_from_api(
         _update_device_name(device, system_info)
 
         # Update firmware version if available
-        _update_firmware_version(device, api, system_info)
+        _update_firmware_version(device, api, system_info, discovery_version)
 
     except (OSError, ValueError, RuntimeError) as e:
         _LOGGER.warning("Failed to get additional device info from API: %s", e)
@@ -503,7 +635,9 @@ def _update_device_name(device: Any, system_info: dict[str, str]) -> None:
     current_name = device.name
 
     # If device name doesn't contain model info, try to add model
-    if product_name and not any(model in current_name for model in ["GNS", "GDS"]):
+    if product_name and not any(
+        model in current_name for model in (DEVICE_TYPE_GNS_NAS, DEVICE_TYPE_GDS)
+    ):
         # Construct new device name including model info
         new_name = f"{product_name.upper()}"
         _LOGGER.info(
@@ -518,7 +652,10 @@ def _update_device_name(device: Any, system_info: dict[str, str]) -> None:
 
 
 def _update_firmware_version(
-    device: Any, api: Any, system_info: dict[str, str]
+    device: Any,
+    api: Any,
+    system_info: dict[str, str],
+    discovery_version: str | None = None,
 ) -> None:
     """Update device firmware version from API or system info."""
     # First try from system info
@@ -532,9 +669,19 @@ def _update_firmware_version(
     if hasattr(api, "version") and api.version:
         _LOGGER.debug("Setting device firmware version from API: %s", api.version)
         device.set_firmware_version(api.version)
+        return
+
+    # Fallback to discovery version
+    if discovery_version:
+        _LOGGER.debug(
+            "Setting device firmware version from discovery: %s", discovery_version
+        )
+        device.set_firmware_version(discovery_version)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(
+    hass: HomeAssistant, entry: GrandstreamConfigEntry
+) -> bool:
     """Unload config entry."""
     # Get device type and API instance before unloading
     device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_GDS)
@@ -543,11 +690,71 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Clear webhook registration on GDS devices before unloading
     await _clear_webhook_registration(hass, api, device_type, entry)
 
+    # Unregister webhooks from Home Assistant
+    await _unregister_webhooks(hass, entry)
+
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+
+async def async_remove_entry(
+    hass: HomeAssistant, entry: GrandstreamConfigEntry
+) -> None:
+    """Handle removal of a config entry.
+
+    This function is called after the config entry has been unloaded and removed.
+    We use it to trigger a re-discovery for manually added devices, ensuring they
+    appear in the discovery list after deletion (similar to discovered devices).
+    """
+    # Only trigger re-discovery for manually added devices (not discovered)
+    # Discovered devices already have discovery_keys and will be re-discovered
+    # automatically by zeroconf/dhcp via signal_discovered_config_entry_removed
+    if entry.source == "user" and not entry.discovery_keys:
+        host = entry.data.get(CONF_HOST)
+        unique_id = entry.unique_id
+
+        if host and unique_id:
+            _LOGGER.info(
+                "Triggering re-discovery for manually added device: %s (%s)",
+                host,
+                unique_id[:17] if len(unique_id) > 17 else unique_id,
+            )
+
+            # Import here to avoid circular imports
+            from homeassistant.helpers.discovery_flow import (  # noqa: PLC0415
+                async_create_flow,
+            )
+            from homeassistant.helpers.service_info.zeroconf import (  # noqa: PLC0415
+                ZeroconfServiceInfo,
+            )
+
+            # Use the device's MAC address to construct the zeroconf service name
+            mac_for_name = unique_id.replace(":", "").upper()
+            service_name = f"gds_{mac_for_name}"
+            service_type = "_https._tcp.local."
+
+            # Create a simulated ZeroconfServiceInfo
+            discovery_info = ZeroconfServiceInfo(
+                ip_address=host,
+                ip_addresses=[host],
+                port=443,
+                hostname=f"{service_name.lower()}.local.",
+                type=service_type,
+                name=f"{service_name}.{service_type}",
+                properties={"version": "unknown"},
+            )
+
+            # Trigger a discovery flow
+            # This ensures the device appears in the discovery list
+            async_create_flow(
+                hass,
+                DOMAIN,
+                {"source": "zeroconf"},
+                discovery_info,
+            )
 
 
 def _get_api_from_hass_data(hass: HomeAssistant, entry_id: str) -> Any:
@@ -584,6 +791,32 @@ async def _clear_webhook_registration(
         _LOGGER.warning(
             "Error clearing webhook registration (device may be offline): %s", e
         )
+
+
+async def _unregister_webhooks(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Unregister webhooks from Home Assistant."""
+
+    device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_GDS)
+    if device_type != DEVICE_TYPE_GDS:
+        return
+
+    # Unregister status webhook
+    status_webhook_id = entry.data.get(CONF_STATUS_WEBHOOK_ID)
+    if status_webhook_id:
+        try:
+            webhook.async_unregister(hass, status_webhook_id)
+            _LOGGER.info("Unregistered status webhook: %s", status_webhook_id)
+        except ValueError:
+            _LOGGER.debug("Status webhook %s was not registered", status_webhook_id)
+
+    # Unregister command webhook
+    command_webhook_id = entry.data.get(CONF_COMMAND_WEBHOOK_ID)
+    if command_webhook_id:
+        try:
+            webhook.async_unregister(hass, command_webhook_id)
+            _LOGGER.info("Unregistered command webhook: %s", command_webhook_id)
+        except ValueError:
+            _LOGGER.debug("Command webhook %s was not registered", command_webhook_id)
 
 
 async def _set_data_receiver(

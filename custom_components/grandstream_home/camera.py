@@ -2,17 +2,13 @@
 
 This module provides Grandstream GDS camera device support for Home Assistant.
 Uses FFmpeg to process RTSP streams and provides snapshot and streaming functionality.
-Config configuration can also take effect:
-camera:
- - platform: ffmpeg
-   name: "Inside Garage Doors"
-   input: -f rtsp -rtsp_transport tcp -i rtsp://1:11@172.16.142.65:554/grandstream/main_stream
 """
 
 import asyncio
 import io
 import logging
 from pathlib import Path
+import re
 import tempfile
 import time
 from typing import Any
@@ -28,20 +24,29 @@ from homeassistant.components.ffmpeg import (
     CONF_INPUT,
     get_ffmpeg_manager,
 )
-from homeassistant.components.ffmpeg.camera import FFmpegCamera
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.ffmpeg.camera import (  # pylint: disable=hass-component-root-import
+    FFmpegCamera,
+)
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from . import GrandstreamConfigEntry
 from .const import (
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_TYPE,
+    CONF_PRODUCT_MODEL,
     CONF_RTSP_ENABLE,
     CONF_RTSP_PASSWORD,
     CONF_RTSP_USERNAME,
+    CONF_VERIFY_SSL,
+    DEFAULT_DEVICE_FEATURES,
+    DEVICE_FEATURES,
     DEVICE_TYPE_GDS,
     DOMAIN,
 )
 from .device import GrandstreamDevice
+from .utils import decrypt_password
 
 
 def is_valid_jpeg(image_data: bytes) -> bool:
@@ -52,6 +57,7 @@ def is_valid_jpeg(image_data: bytes) -> bool:
 
     Returns:
         True if the image is a valid JPEG, False otherwise
+
     """
     if not image_data or len(image_data) < 100:
         return False
@@ -62,17 +68,16 @@ def is_valid_jpeg(image_data: bytes) -> bool:
             img.verify()
     except UnidentifiedImageError:
         return False
-    except (OSError, ValueError):
+    except (OSError, ValueError) as _:
         return False
-    else:
-        return True
+    return True
 
 
 # Cache for loaded fonts to avoid repeated filesystem checks
-_FONT_CACHE = {}
+_FONT_CACHE: dict[int, Any] = {}
 
 
-def _get_cached_font(size: int = 11) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def _get_cached_font(size: int = 11) -> Any:
     """Get a cached font or load and cache a new one.
 
     Args:
@@ -80,6 +85,7 @@ def _get_cached_font(size: int = 11) -> ImageFont.FreeTypeFont | ImageFont.Image
 
     Returns:
         PIL font object
+
     """
     # Check cache first
     if size in _FONT_CACHE:
@@ -99,10 +105,10 @@ def _get_cached_font(size: int = 11) -> ImageFont.FreeTypeFont | ImageFont.Image
 
         for path in font_paths:
             if Path(path).exists():
-                font = ImageFont.truetype(path, size)
+                font: Any = ImageFont.truetype(path, size)
                 _FONT_CACHE[size] = font
                 return font
-    except (OSError, ImportError):
+    except (OSError, ImportError) as _:
         pass
 
     # Fall back to default font
@@ -122,6 +128,7 @@ def generate_blank_image(width: int = 640, height: int = 480) -> bytes | None:
 
     Returns:
         JPEG image data as bytes or None if generation failed
+
     """
     try:
         # Create blank image with dark theme color
@@ -157,6 +164,32 @@ def generate_blank_image(width: int = 640, height: int = 480) -> bytes | None:
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _mask_rtsp_credentials(url: str) -> str:
+    """Mask credentials in RTSP URL for safe display.
+
+    Args:
+        url: RTSP URL that may contain credentials
+
+    Returns:
+        URL with credentials masked as ****
+
+    Example:
+        rtsp://admin:password@192.168.1.1:554/stream -> rtsp://admin:****@192.168.1.1:554/stream
+        rtsp://admin:pass@word@192.168.1.1:554/stream -> rtsp://admin:****@192.168.1.1:554/stream
+
+    """
+    if not url:
+        return url
+    # Pattern: protocol://username:password@host
+    # Password may contain special chars like @, so we need to handle it correctly
+    # Find the last @ before host (host contains . or :)
+    # Use greedy match for password part, then match @ followed by host pattern
+    return re.sub(
+        r"(://[^:]+:).*(@[\d.]+|@\w+\.\w+|@\[[\da-fA-F:]+\])", r"\1****\2", url
+    )
+
+
 # Preview image maximum cache time (seconds)
 PREVIEW_CACHE_TIMEOUT = 10
 # Maximum retry attempts to get image
@@ -168,7 +201,9 @@ FFMPEG_TIMEOUT = 8
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant,
+    entry: GrandstreamConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the Grandstream camera platform.
 
@@ -179,9 +214,11 @@ async def async_setup_entry(
 
     Features:
         1. Verify if the device is a GDS camera
-        2. Check if RTSP is enabled
-        3. Get RTSP configuration from the device
-        4. Create and add camera entities to Home Assistant
+        2. Check if device model supports RTSP
+        3. Check if RTSP is enabled
+        4. Get RTSP configuration from the device
+        5. Create and add camera entities to Home Assistant
+
     """
     # Early validation to avoid unnecessary work
     device_type = entry.data.get(CONF_DEVICE_TYPE)
@@ -190,6 +227,21 @@ async def async_setup_entry(
             "Device type %s does not support camera functionality", device_type
         )
         return
+
+    # Get product model to check RTSP capability
+    product_model = entry.data.get(CONF_PRODUCT_MODEL)
+    if product_model:
+        features = DEVICE_FEATURES.get(product_model, DEFAULT_DEVICE_FEATURES)
+        has_rtsp = features.get("has_rtsp", True)
+        if not has_rtsp:
+            _LOGGER.info(
+                "Product model %s does not support RTSP, skipping camera setup",
+                product_model,
+            )
+            return
+
+    # Get original device model (GDS or GSC)
+    device_model = entry.data.get(CONF_DEVICE_MODEL, DEVICE_TYPE_GDS)
 
     # Check if RTSP is enabled
     rtsp_enabled = entry.data.get(CONF_RTSP_ENABLE, False)
@@ -201,19 +253,30 @@ async def async_setup_entry(
     device_data = hass.data[DOMAIN].get(entry.entry_id, {})
     device = device_data.get("device")
     api = device_data.get("api")
+    coordinator = device_data.get("coordinator")
 
-    if not api or not device:
-        _LOGGER.error("Cannot setup camera: API or device instance not found")
+    if not api or not device or not coordinator:
+        _LOGGER.error(
+            "Cannot setup camera: API, device instance or coordinator not found"
+        )
         return
 
     # Get RTSP credentials from config entry
     rtsp_username = entry.data.get(CONF_RTSP_USERNAME)
-    rtsp_password = entry.data.get(CONF_RTSP_PASSWORD)
+    encrypted_rtsp_password = entry.data.get(CONF_RTSP_PASSWORD)
+    verify_ssl = entry.data.get(CONF_VERIFY_SSL, False)
+
+    # Decrypt RTSP password
+    rtsp_password = (
+        decrypt_password(encrypted_rtsp_password, entry.unique_id or "default")
+        if encrypted_rtsp_password
+        else None
+    )
 
     # Validate credentials early
     if not rtsp_username or not rtsp_password:
         _LOGGER.error(
-            "RTSP enabled but credentials missing. Please set rtsp_username and rtsp_password in config."
+            "RTSP enabled but credentials missing. Please set rtsp_username and rtsp_password in config"
         )
         return
 
@@ -225,7 +288,7 @@ async def async_setup_entry(
     except (RuntimeError, ConnectionError, requests.RequestException, OSError) as e:
         _LOGGER.error("Failed to obtain RTSP URL: %s", e)
         return
-    _LOGGER.debug("Obtained RTSP URL: %s", rtsp_url)
+    _LOGGER.debug("Obtained RTSP URL for camera setup")
 
     # Construct snapshot URL
     snapshot_url = f"{api.base_address}/snapshot/view0.jpg"
@@ -235,16 +298,32 @@ async def async_setup_entry(
 
     # Create optimized FFmpeg config with lower latency settings
     # -rtsp_transport tcp: Use TCP transport for RTSP stream, more stable
-    # -stimeout 5000000: Set RTSP timeout to 5 seconds
-    # -re: Read input at native frame rate
-    # -tune zerolatency: Reduce latency
-    # -preset ultrafast: Faster processing
-    # -fflags nobuffer: Do not use input buffer
-    # -thread_queue_size 512: Reduce queue size for lower latency
+    # -stimeout 5000000: Set RTSP timeout to 5 seconds (microseconds)
+    # -probesize 32: Minimal probe size for faster startup
+    # -analyzeduration 0: Disable stream analysis for faster startup
+    # -fflags nobuffer+fastseek+flush_packets: Reduce buffering
+    # -flags low_delay: Enable low delay mode for real-time playback
+    # -framerate 15: Set input framerate (GDS cameras typically 15fps for sub-stream)
+    # -sync ext: Use external clock for synchronization
+    # -avoid_negative_ts make_zero: Handle timestamp issues during motion
+    # -max_delay 0: Minimize delay
+    # -reorder_queue_size 0: Disable reordering queue to reduce latency
     config = {
         CONF_NAME: camera_name,
         CONF_INPUT: rtsp_url,
-        CONF_EXTRA_ARGUMENTS: "-rtsp_transport tcp -stimeout 5000000 -re -fflags nobuffer -tune zerolatency -preset ultrafast -thread_queue_size 512",
+        CONF_EXTRA_ARGUMENTS: (
+            "-rtsp_transport tcp "
+            "-stimeout 5000000 "
+            "-probesize 32 "
+            "-analyzeduration 0 "
+            "-fflags nobuffer+fastseek+flush_packets "
+            "-flags low_delay "
+            "-framerate 15 "
+            "-sync ext "
+            "-avoid_negative_ts make_zero "
+            "-max_delay 0 "
+            "-reorder_queue_size 0"
+        ),
     }
 
     # Create and add camera entity
@@ -256,10 +335,18 @@ async def async_setup_entry(
         rtsp_url=rtsp_url,
         snapshot_url=snapshot_url,
         device=device,
+        coordinator=coordinator,
+        verify_ssl=verify_ssl,
+        device_model=device_model,
+        product_model=product_model,
     )
 
     async_add_entities([camera], True)
-    _LOGGER.info("Added Grandstream GDS FFmpeg camera entity: %s", camera_name)
+    _LOGGER.info(
+        "Added Grandstream %s FFmpeg camera entity: %s",
+        product_model or device_model,
+        camera_name,
+    )
 
 
 class GrandstreamFFmpegCamera(FFmpegCamera):
@@ -272,7 +359,12 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
     4. Maintain device-specific attributes and status
     """
 
-    _attr_supported_features = CameraEntityFeature.STREAM
+    @property
+    def supported_features(self) -> CameraEntityFeature:
+        """Return supported features."""
+        if not self.available:
+            return CameraEntityFeature(0)
+        return CameraEntityFeature.STREAM
 
     def __init__(
         self,
@@ -283,6 +375,10 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
         rtsp_url: str,
         snapshot_url: str,
         device: GrandstreamDevice | None = None,
+        coordinator=None,
+        verify_ssl: bool = False,
+        device_model: str = DEVICE_TYPE_GDS,
+        product_model: str | None = None,
     ) -> None:
         """Initialize FFmpeg camera.
 
@@ -294,29 +390,45 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
             rtsp_url: RTSP stream URL
             snapshot_url: HTTP snapshot URL
             device: Grandstream device instance for device registry linkage
+            coordinator: Data update coordinator for state updates
+            verify_ssl: Verify SSL certificate (default: False)
+            device_model: Original device model (GDS or GSC)
+            product_model: Specific product model (e.g., GDS3725, GDS3727)
+
         """
         super().__init__(hass, config)
 
+        # Store device model and product model
+        self._device_model = device_model
+        self._product_model = product_model
+
         # Set entity attributes
         self._attr_unique_id = unique_id
+        self._attr_name = config[CONF_NAME]
         self._attr_extra_state_attributes = {
-            "device_type": DEVICE_TYPE_GDS,
+            "device_type": device_model,
             "ip_address": ip_address,
-            "rtsp_url": rtsp_url,
+            "rtsp_url": _mask_rtsp_credentials(
+                rtsp_url
+            ),  # Mask credentials for security
         }
+        # Store device reference for API access
+        self._device = device
+        self._coordinator = coordinator
         if device is not None:
             self._attr_device_info = device.device_info
 
         self._snapshot_url = snapshot_url
-        self._last_image = None
-        self._last_image_time = 0
+        self._last_image: bytes | None = None
+        self._last_image_time: float = 0.0
         self._input = config[CONF_INPUT]
         self._extra_arguments = config.get(CONF_EXTRA_ARGUMENTS, "")
         self._manager = get_ffmpeg_manager(hass)
         self._lock = asyncio.Lock()
         self._retry_count = 0  # Add retry counter
         self._consecutive_failures = 0  # Track consecutive failures for adaptive retry
-        self._last_failure_time = 0  # Track when last failure occurred
+        self._last_failure_time: float = 0.0  # Track when last failure occurred
+        self._verify_ssl = verify_ssl  # SSL verification setting
 
     # Helper methods for logging
     def _log_debug(self, message: str, *args) -> None:
@@ -330,6 +442,50 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
     def _log_error(self, message: str, *args) -> None:
         """Log error message with context."""
         _LOGGER.error("[%s] %s", self._attr_unique_id, message % args)
+
+    def _get_api_instance(self):
+        """Get API instance from hass.data."""
+        if not self._device:
+            return None
+
+        config_entry_id = getattr(self._device, "config_entry_id", None)
+        if not config_entry_id:
+            return None
+
+        if DOMAIN not in self.hass.data:
+            return None
+
+        entry_data = self.hass.data[DOMAIN].get(config_entry_id)
+        if not entry_data:
+            return None
+
+        return entry_data.get("api")
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        api = self._get_api_instance()
+
+        if not api:
+            return False
+
+        # Check if device is online
+        if hasattr(api, "is_online") and not api.is_online:
+            return False
+
+        # Check if account is locked
+        if hasattr(api, "is_account_locked") and api.is_account_locked:
+            return False
+
+        # Check if device is authenticated
+        if hasattr(api, "is_authenticated") and not api.is_authenticated:
+            return False
+
+        # Check if HA control is disabled on device
+        if hasattr(api, "is_ha_control_enabled") and not api.is_ha_control_enabled:
+            return False
+
+        return True
 
     # Helper methods for state management
     def _should_skip_fetch(self, current_time: float) -> bool:
@@ -362,6 +518,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Returns:
             True if image is valid and cached, False otherwise
+
         """
         if not image_data or len(image_data) < 100:
             return False
@@ -386,13 +543,43 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
             self._last_image_time = time.time()
         return blank_image
 
+    async def async_added_to_hass(self) -> None:
+        """Run when entity is added to hass."""
+        await super().async_added_to_hass()
+
+        # Listen to coordinator updates for state changes
+        if self._coordinator:
+            self.async_on_remove(
+                self._coordinator.async_add_listener(self._handle_coordinator_update)
+            )
+
+        # Force initial state update
+        self.async_write_ha_state()
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        # Force state update when coordinator data changes
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up when entity is removed."""
+        await super().async_will_remove_from_hass()
+
+    async def async_update(self) -> None:
+        """Update the entity state."""
+        # Just update internal state, don't force write state here
+
     # Public interface methods
     async def stream_source(self) -> str:
         """Return the stream source.
 
         Returns:
-            str: RTSP stream URL
+            str: RTSP stream URL if available, empty string otherwise
+
         """
+        # Check if camera is available before returning stream source
+        if not self.available:
+            return ""
         return self._input
 
     # Public properties
@@ -404,7 +591,8 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
     @property
     def model(self) -> str:
         """Return the camera model."""
-        return DEVICE_TYPE_GDS
+        # Return product model if available, otherwise device model
+        return self._product_model or self._device_model
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
@@ -424,7 +612,12 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Return:
             Optional[bytes]: JPEG format image data, returns None if all methods fail
+
         """
+        # Check if camera is available first
+        if not self.available:
+            return None
+
         current_time = time.time()
         width = width or 640
         height = height or 480
@@ -433,6 +626,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         # Early return if we have a valid cached image
         if self._is_cache_valid(current_time):
+            assert self._last_image is not None
             self._log_debug(
                 "Returning cached image, age=%s seconds, size=%s bytes",
                 int(current_time - self._last_image_time),
@@ -484,6 +678,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Returns:
             True if successful and image cached, False otherwise
+
         """
         image_data = await self._fetch_http_snapshot()
         if not image_data:
@@ -501,6 +696,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Returns:
             True if successful and image cached, False otherwise
+
         """
         image_data = await self._fetch_ffmpeg_image()
         if not image_data:
@@ -518,6 +714,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Returns:
             True if successful and image cached, False otherwise
+
         """
         image_data = await self._get_image_with_subprocess()
         if not image_data:
@@ -547,13 +744,14 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Returns:
             Raw image data or None if fetching failed
+
         """
         try:
             self._log_debug("Starting HTTP snapshot: %s", self._snapshot_url)
 
             connector = aiohttp.TCPConnector(
                 force_close=False,
-                ssl=False,
+                ssl=self._verify_ssl,
                 limit=10,  # Limit connection pool size
                 limit_per_host=5,
             )
@@ -570,13 +768,13 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
                     connector=connector,
                     timeout=aiohttp.ClientTimeout(total=HTTP_SNAPSHOT_TIMEOUT),
                 ) as session,
-                session.get(self._snapshot_url, headers=headers, ssl=False) as response,
+                session.get(
+                    self._snapshot_url, headers=headers, ssl=self._verify_ssl
+                ) as response,
             ):
                 if response.status == 200:
                     return await response.read()
-                self._log_debug(
-                    "HTTP request failed with status: %s", response.status
-                )
+                self._log_debug("HTTP request failed with status: %s", response.status)
 
         except TimeoutError:
             self._log_debug("HTTP request timed out")
@@ -590,6 +788,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Returns:
             Raw image data or None if fetching failed
+
         """
         image = None
         try:
@@ -622,6 +821,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
         Returns:
             Raw image data or None if fetching failed
+
         """
         try:
             self._log_debug("Starting subprocess FFmpeg call")
@@ -658,7 +858,7 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
 
                 # Wait for command completion with timeout
                 try:
-                    stdout, stderr = await asyncio.wait_for(
+                    _, _ = await asyncio.wait_for(
                         process.communicate(),
                         timeout=FFMPEG_TIMEOUT
                         + 2,  # Slightly longer timeout for subprocess
@@ -684,10 +884,28 @@ class GrandstreamFFmpegCamera(FFmpegCamera):
                     try:
                         process.terminate()
                         await asyncio.wait_for(process.wait(), timeout=2)
-                    except (TimeoutError, ProcessLookupError, OSError):
+                    except (TimeoutError, ProcessLookupError, OSError) as _:
                         pass
 
         except (TimeoutError, OSError, ValueError) as e:
             self._log_debug("Subprocess error: %s", e)
 
         return None
+
+    def camera_image(
+        self, width: int | None = None, height: int | None = None
+    ) -> bytes | None:
+        """Return camera image."""
+        return asyncio.run(self.async_camera_image(width, height))
+
+    def turn_on(self) -> None:
+        """Turn on camera (no-op for RTSP cameras)."""
+
+    def turn_off(self) -> None:
+        """Turn off camera (no-op for RTSP cameras)."""
+
+    def enable_motion_detection(self) -> None:
+        """Enable motion detection (not supported)."""
+
+    def disable_motion_detection(self) -> None:
+        """Disable motion detection (not supported)."""
