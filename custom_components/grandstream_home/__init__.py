@@ -5,6 +5,7 @@ import logging
 import socket
 from typing import Any
 
+from grandstream_home_api import GDSPhoneAPI, GNSNasAPI
 from homeassistant.components import webhook
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, Platform
@@ -12,7 +13,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
-from .api import GDSPhoneAPI, GNSNasAPI
 from .const import (
     CONF_COMMAND_WEBHOOK_ID,
     CONF_DEVICE_MODEL,

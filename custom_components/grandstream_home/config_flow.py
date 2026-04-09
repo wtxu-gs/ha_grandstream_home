@@ -9,6 +9,7 @@ from typing import Any
 
 import voluptuous as vol
 
+from grandstream_home_api import GDSPhoneAPI, GNSNasAPI
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
 from homeassistant.data_entry_flow import AbortFlow
@@ -16,7 +17,6 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
-from .api import GDSPhoneAPI, GNSNasAPI
 from .const import (
     CONF_COMMAND_WEBHOOK_ID,
     CONF_DEVICE_MODEL,
