@@ -232,25 +232,35 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Abort any existing flows for this device to prevent duplicates
         await self._abort_all_flows_for_device(unique_id, self._host)
 
+        # Wait and verify that flows are cleaned up
+        # Sometimes async_abort doesn't immediately remove the flow
+        import asyncio
+
+        for attempt in range(3):
+            remaining_flows = [
+                f
+                for f in self.hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+                if f.get("unique_id") == unique_id and f["flow_id"] != self.flow_id
+            ]
+            if not remaining_flows:
+                break
+            _LOGGER.info(
+                "Waiting for flow cleanup, attempt %d, remaining: %s",
+                attempt + 1,
+                [f["flow_id"][:8] for f in remaining_flows],
+            )
+            await asyncio.sleep(0.1)
+
         _LOGGER.info(
             "Zeroconf discovery: About to set unique_id=%s, checking for existing flows",
             unique_id,
         )
 
         # Set unique_id and check if already configured
-        # Use raise_on_progress=True to abort if another flow with same unique_id is in progress
-        # This prevents duplicate discovery flows for the same device
-        try:
-            current_entry = await self.async_set_unique_id(
-                unique_id, raise_on_progress=True
-            )
-        except AbortFlow:
-            # Another flow is already in progress for this device
-            _LOGGER.info(
-                "Another discovery flow already in progress for %s, aborting",
-                unique_id,
-            )
-            return self.async_abort(reason="already_in_progress")
+        # Use raise_on_progress=False so we can handle in-progress flows ourselves
+        current_entry = await self.async_set_unique_id(
+            unique_id, raise_on_progress=False
+        )
 
         _LOGGER.info(
             "Zeroconf discovery: async_set_unique_id result - entry=%s, self.unique_id=%s",
@@ -409,9 +419,24 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             host,
         )
 
-        for flow in flow_manager.async_progress_by_handler(DOMAIN):
+        all_flows = list(flow_manager.async_progress_by_handler(DOMAIN))
+        _LOGGER.info(
+            "Found %d total flows for domain %s",
+            len(all_flows),
+            DOMAIN,
+        )
+
+        for flow in all_flows:
+            _LOGGER.info(
+                "Checking flow %s: unique_id=%s, flow_id=%s (current=%s)",
+                flow["flow_id"][:8],
+                flow.get("unique_id"),
+                flow["flow_id"],
+                self.flow_id,
+            )
             # Skip the current flow
             if flow["flow_id"] == self.flow_id:
+                _LOGGER.info("Skipping current flow %s", flow["flow_id"][:8])
                 continue
 
             should_abort = False
@@ -434,6 +459,56 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if context.get("host") == host:
                     should_abort = True
                     reason = "host in context"
+
+            # 4. Check title_placeholders for device name match
+            # This catches flows for the same device discovered with different IPs
+            if not should_abort and self._name:
+                context = flow.get("context", {})
+                title_placeholders = context.get("title_placeholders", {})
+                flow_name = title_placeholders.get("name", "")
+                _LOGGER.info(
+                    "Flow %s title_placeholders: %s, flow_name=%s, self._name=%s",
+                    flow["flow_id"][:8],
+                    title_placeholders,
+                    flow_name,
+                    self._name,
+                )
+                if flow_name and self._name and flow_name == self._name:
+                    should_abort = True
+                    reason = f"same device name: {self._name}"
+
+            # 5. Check if MAC appears in device name in title_placeholders
+            # Extract MAC from device name like GSC_EC74D7F2D458
+            if not should_abort and self._name:
+                context = flow.get("context", {})
+                title_placeholders = context.get("title_placeholders", {})
+                flow_name = title_placeholders.get("name", "")
+                if flow_name:
+                    flow_mac = extract_mac_from_name(flow_name)
+                    current_mac = extract_mac_from_name(self._name)
+                    _LOGGER.info(
+                        "Flow %s MAC check: flow_mac=%s, current_mac=%s",
+                        flow["flow_id"][:8],
+                        flow_mac,
+                        current_mac,
+                    )
+                    if flow_mac and current_mac and flow_mac == current_mac:
+                        should_abort = True
+                        reason = f"same MAC in name: {flow_mac}"
+
+            # 6. If still no match, abort any flow that doesn't have a unique_id yet
+            # for the same device type (they are likely stale)
+            if not should_abort and flow.get("unique_id") is None:
+                context = flow.get("context", {})
+                title_placeholders = context.get("title_placeholders", {})
+                flow_name = title_placeholders.get("name", "")
+                # Check if both are GDS/GSC devices
+                if flow_name and self._name:
+                    flow_is_gds = flow_name.upper().startswith(("GDS_", "GSC_"))
+                    current_is_gds = self._name.upper().startswith(("GDS_", "GSC_"))
+                    if flow_is_gds and current_is_gds:
+                        should_abort = True
+                        reason = f"both GDS/GSC devices without unique_id"
 
             if should_abort:
                 flows_to_abort.append((flow["flow_id"], reason))
@@ -459,6 +534,54 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     flow_id[:8],
                     err,
                 )
+
+    async def _update_in_progress_flow(
+        self, unique_id: str, new_host: str, new_port: int
+    ) -> None:
+        """Update the in-progress flow with new host and port.
+
+        This is called when a device is discovered with a new IP but another
+        discovery flow is already in progress. We update the existing flow's
+        host/port so the user sees the correct IP in the discovery UI.
+
+        Args:
+            unique_id: The unique ID of the device
+            new_host: The new IP address
+            new_port: The new port number
+
+        """
+        if not self.hass:
+            return
+
+        flow_manager = self.hass.config_entries.flow
+
+        for flow in flow_manager.async_progress_by_handler(DOMAIN):
+            if flow.get("unique_id") == unique_id:
+                _LOGGER.info(
+                    "Updating in-progress flow %s with new host=%s, port=%s",
+                    flow["flow_id"][:8],
+                    new_host,
+                    new_port,
+                )
+                # Get the flow handler instance to update its internal state
+                try:
+                    handler = flow_manager.async_get(flow["flow_id"])
+                    if hasattr(handler, "_host"):
+                        handler._host = new_host
+                    if hasattr(handler, "_port"):
+                        handler._port = new_port
+                    # Update context title_placeholders with new info
+                    context = flow.get("context", {})
+                    if "title_placeholders" in context:
+                        context["title_placeholders"]["host"] = new_host
+                        # Force context update
+                        handler.context = context
+                except (KeyError, AttributeError) as err:
+                    _LOGGER.warning(
+                        "Failed to update in-progress flow: %s",
+                        err,
+                    )
+                break
 
     def _is_grandstream(self, product_name):
         """Check if the device is a Grandstream device.
