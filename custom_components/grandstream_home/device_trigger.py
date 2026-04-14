@@ -102,14 +102,65 @@ async def async_get_triggers(
         features = DEFAULT_DEVICE_FEATURES
 
     has_di_3 = features.get("has_di_3", False)
+    has_qr_code_unlock = features.get("has_qr_code_unlock", False)
+    has_bluetooth = features.get("has_bluetooth", False)
+    has_nfc = features.get("has_nfc", False)
+    has_rfid = features.get("has_rfid", False)
+    has_duress_alarm = features.get("has_duress_alarm", False)
+    has_anti_tamper = features.get("has_anti_tamper", False)
+    has_person_stay_alarm = features.get("has_person_stay_alarm", False)
+    has_security_mode = features.get("has_security_mode", False)
+    has_password_unlock = features.get("has_password_unlock", False)
 
-    # Remove di_3 trigger if device doesn't support it
-    if not has_di_3 and "di_3" in valid_triggers:
-        _LOGGER.debug(
-            "Removing di_3 trigger for product model %s (not supported)",
-            product_model or "unknown",
+    # Remove triggers not supported by device
+    triggers_to_remove = []
+
+    if not has_di_3:
+        triggers_to_remove.append("di_3")
+
+    if not has_qr_code_unlock:
+        triggers_to_remove.extend(["door_opened_qrcode", "door_opened_guest_qrcode"])
+
+    if not has_bluetooth:
+        triggers_to_remove.append("door_opened_ble")
+
+    if not has_nfc:
+        triggers_to_remove.append("door_opened_nfc")
+
+    if not has_rfid:
+        triggers_to_remove.extend(["door_opened_rfid", "unauthorized_rfid"])
+
+    if not has_duress_alarm:
+        triggers_to_remove.append("hostage")
+
+    if not has_anti_tamper:
+        triggers_to_remove.append("tamper")
+
+    if not has_person_stay_alarm:
+        triggers_to_remove.append("personnel_intrusion")
+
+    if not has_security_mode:
+        triggers_to_remove.append("safe_room_alarm")
+
+    if not has_password_unlock:
+        triggers_to_remove.extend(
+            [
+                "door_opened_common_password",
+                "door_opened_personal_password",
+                "door_opened_temp_password",
+                "door_opened_card_password",
+                "keypad_error",
+            ]
         )
-        del valid_triggers["di_3"]
+
+    for trigger in triggers_to_remove:
+        if trigger in valid_triggers:
+            _LOGGER.debug(
+                "Removing %s trigger for product model %s (not supported)",
+                trigger,
+                product_model or "unknown",
+            )
+            del valid_triggers[trigger]
 
     _LOGGER.debug(
         "Creating triggers for %s device: %s (product: %s, valid triggers: %d)",
