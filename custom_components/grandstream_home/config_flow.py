@@ -287,14 +287,8 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             host_changed = current_host != self._host
             port_changed = current_port != self._port
 
-            if not host_changed and not port_changed:
-                # Same device, same IP and port - already configured
-                _LOGGER.info(
-                    "Device %s unchanged (same host and port), aborting discovery",
-                    unique_id,
-                )
-                self._abort_if_unique_id_configured()
-            else:
+            # Check if host or port changed
+            if host_changed or port_changed:
                 # Same device, but IP or port changed - update and reload
                 changes = []
                 if host_changed:
@@ -303,7 +297,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     changes.append(f"port: {current_port} -> {self._port}")
 
                 _LOGGER.info(
-                    "Device %s reconnected with changes: %s, reloading integration",
+                    "Device %s reconnected with changes: %s, updating and reloading",
                     unique_id,
                     ", ".join(changes),
                 )
@@ -322,7 +316,13 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 # Reload the integration to reconnect
                 await self.hass.config_entries.async_reload(current_entry.entry_id)
-                return self.async_abort(reason="already_configured")
+
+            # Always abort with updates to ensure discovery flow is properly closed
+            _LOGGER.info(
+                "Device %s already configured, aborting discovery",
+                unique_id,
+            )
+            raise AbortFlow("already_configured")
 
         return await self.async_step_auth()
 
@@ -496,19 +496,7 @@ class GrandstreamConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         should_abort = True
                         reason = f"same MAC in name: {flow_mac}"
 
-            # 6. If still no match, abort any flow that doesn't have a unique_id yet
-            # for the same device type (they are likely stale)
-            if not should_abort and flow.get("unique_id") is None:
-                context = flow.get("context", {})
-                title_placeholders = context.get("title_placeholders", {})
-                flow_name = title_placeholders.get("name", "")
-                # Check if both are GDS/GSC devices
-                if flow_name and self._name:
-                    flow_is_gds = flow_name.upper().startswith(("GDS_", "GSC_"))
-                    current_is_gds = self._name.upper().startswith(("GDS_", "GSC_"))
-                    if flow_is_gds and current_is_gds:
-                        should_abort = True
-                        reason = f"both GDS/GSC devices without unique_id"
+
 
             if should_abort:
                 flows_to_abort.append((flow["flow_id"], reason))
