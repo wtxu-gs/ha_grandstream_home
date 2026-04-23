@@ -59,6 +59,7 @@ GDS_TRIGGER_TYPES = {
     "door_opened_pin": "Door Opened by PIN Code",
     "door_opened_guest_qrcode": "Door Opened by Guest QR Code",
     "door_opened_touch_pass": "Door Opened by Touch Pass",
+    "door_opened_third_party": "Door Opened by Third Party",
     "phone_busy": "Phone Status Busy",
     "phone_ringing": "Phone Status Ringing",
 }
@@ -123,6 +124,7 @@ DOOR_ACCESS_TYPE_MAPPING = {
     "door_opened_pin": "12",
     "door_opened_guest_qrcode": "13",
     "door_opened_touch_pass": "14",
+    "door_opened_third_party": "15",  # Third-party system unlock (e.g., Home Assistant)
 }
 
 # All door access triggers (for easy checking)

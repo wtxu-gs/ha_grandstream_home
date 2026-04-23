@@ -145,6 +145,7 @@
             "door_opened_rfid": "刷卡开门",
             "door_opened_sip": "SIP呼叫开门",
             "door_opened_temp_password": "临时密码开门",
+            "door_opened_third_party": "第三方开门",
             "door_opened_touch_pass": "Touch Pass开门",
             "fan_abnormal": "风扇状态异常",
             "high_temperature": "高温报警",

@@ -20,7 +20,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class GrandstreamCoordinator(DataUpdateCoordinator):
+class GrandstreamCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Class to manage fetching data from Grandstream device."""
 
     last_update_method: str | None = None

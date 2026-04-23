@@ -145,6 +145,7 @@
             "door_opened_rfid": "Door Opened by RFID Card",
             "door_opened_sip": "Door Opened by SIP Call",
             "door_opened_temp_password": "Door Opened by Temporary Password",
+            "door_opened_third_party": "Door Opened by Third Party",
             "door_opened_touch_pass": "Door Opened by Touch Pass",
             "fan_abnormal": "Fan Status Abnormal",
             "high_temperature": "High Temperature Alarm",
