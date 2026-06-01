@@ -282,9 +282,32 @@ async def async_setup_entry(
 
     _LOGGER.info("Using configured RTSP credentials: username=%s", rtsp_username)
 
-    # Get RTSP URL
+    # Get RTSP info from device (enable/port/auth)
+    rtsp_info: dict[str, Any] = {}
     try:
-        rtsp_url = await hass.async_add_executor_job(api.get_rtsp_url)
+        rtsp_info = await hass.async_add_executor_job(api.get_rtsp_info)
+    except (RuntimeError, ConnectionError, requests.RequestException, OSError) as e:
+        _LOGGER.warning("Failed to get RTSP info from device: %s", e)
+
+    # Check RTSP enable status from device
+    if rtsp_info.get("response") == "success":
+        body = rtsp_info.get("body", {})
+        device_rtsp_enable = body.get("rtspEnable", 1)
+        if device_rtsp_enable == 0:
+            _LOGGER.warning(
+                "RTSP is disabled on device, camera may not work properly"
+            )
+    else:
+        _LOGGER.debug(
+            "Could not retrieve RTSP info from device, using config entry settings"
+        )
+
+    # Get RTSP URL with device-reported port
+    try:
+        rtsp_port = None
+        if rtsp_info.get("response") == "success":
+            rtsp_port = rtsp_info.get("body", {}).get("rtspPort")
+        rtsp_url = await hass.async_add_executor_job(api.get_rtsp_url, rtsp_port)
     except (RuntimeError, ConnectionError, requests.RequestException, OSError) as e:
         _LOGGER.error("Failed to obtain RTSP URL: %s", e)
         return
