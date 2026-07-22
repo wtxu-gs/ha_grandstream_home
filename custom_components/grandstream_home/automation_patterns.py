@@ -60,6 +60,13 @@ GDS_TRIGGER_TYPES = {
     "door_opened_guest_qrcode": "Door Opened by Guest QR Code",
     "door_opened_touch_pass": "Door Opened by Touch Pass",
     "door_opened_third_party": "Door Opened by Third Party",
+    "door_opened_indoor_unit": "Door Opened by Indoor Unit",
+    "door_opened_face": "Door Opened by Face Recognition",
+    "door_opened_password_face": "Door Opened by Password and Face Recognition",
+    "door_opened_card_face": "Door Opened by Card and Face Recognition",
+    "door_opened_face_password": "Door Opened by Face Recognition and Password",
+    "door_opened_face_card": "Door Opened by Face Recognition and Card",
+    "admin_auth_failure": "Backend Admin Continuous Authentication Failure Alarm",
     "phone_busy": "Phone Status Busy",
     "phone_ringing": "Phone Status Ringing",
 }
@@ -72,6 +79,12 @@ GDS_ONLY_TRIGGER_TYPES = {
     "door_opened_common_password": "Door Opened by Common Password",
     "keypad_error": "Keypad Multiple Input Errors Alarm",
     "di_3": "Digital Input Alarm 3",
+    "door_opened_face": "Door Opened by Face Recognition",
+    "door_opened_password_face": "Door Opened by Password and Face Recognition",
+    "door_opened_card_face": "Door Opened by Card and Face Recognition",
+    "door_opened_face_password": "Door Opened by Face Recognition and Password",
+    "door_opened_face_card": "Door Opened by Face Recognition and Card",
+    "admin_auth_failure": "Backend Admin Continuous Authentication Failure Alarm",
 }
 
 # GSC specific triggers (only for GSC devices)
@@ -104,6 +117,7 @@ GDS_EVENT_MAPPING = {
     "power_insufficient": "18",  # GSC specific
     "safe_room_alarm": "19",
     "door_close_timeout": "20",
+    "admin_auth_failure": "21",
 }
 
 # Door access type mapping (for door_opened event with type="access")
@@ -125,6 +139,12 @@ DOOR_ACCESS_TYPE_MAPPING = {
     "door_opened_guest_qrcode": "13",
     "door_opened_touch_pass": "14",
     "door_opened_third_party": "15",  # Third-party system unlock (e.g., Home Assistant)
+    "door_opened_indoor_unit": "16",
+    "door_opened_face": "17",
+    "door_opened_password_face": "18",
+    "door_opened_card_face": "19",
+    "door_opened_face_password": "20",
+    "door_opened_face_card": "21",
 }
 
 # All door access triggers (for easy checking)

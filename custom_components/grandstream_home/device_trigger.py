@@ -111,6 +111,8 @@ async def async_get_triggers(
     has_person_stay_alarm = features.get("has_person_stay_alarm", False)
     has_security_mode = features.get("has_security_mode", False)
     has_password_unlock = features.get("has_password_unlock", False)
+    has_face_recognition = features.get("has_face_recognition", False)
+    has_admin_auth_failure_alarm = features.get("has_admin_auth_failure_alarm", False)
 
     # Remove triggers not supported by device
     triggers_to_remove = []
@@ -152,6 +154,20 @@ async def async_get_triggers(
                 "keypad_error",
             ]
         )
+
+    if not has_face_recognition:
+        triggers_to_remove.extend(
+            [
+                "door_opened_face",
+                "door_opened_password_face",
+                "door_opened_card_face",
+                "door_opened_face_password",
+                "door_opened_face_card",
+            ]
+        )
+
+    if not has_admin_auth_failure_alarm:
+        triggers_to_remove.append("admin_auth_failure")
 
     for trigger in triggers_to_remove:
         if trigger in valid_triggers:

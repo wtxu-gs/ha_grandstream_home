@@ -152,6 +152,7 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_duress_alarm": True,
         "has_anti_tamper": True,
         "has_person_stay_alarm": True,
+        "has_admin_auth_failure_alarm": True,
     },
     PRODUCT_GDS3732: {
         "door_count": 2,
@@ -169,6 +170,7 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_duress_alarm": True,
         "has_anti_tamper": True,
         "has_person_stay_alarm": True,
+        "has_admin_auth_failure_alarm": True,
     },
     PRODUCT_GSC3560: {
         "door_count": 2,
@@ -223,6 +225,7 @@ DEFAULT_DEVICE_FEATURES = {
     "has_duress_alarm": True,
     "has_anti_tamper": True,
     "has_person_stay_alarm": True,
+    "has_admin_auth_failure_alarm": True,
 }
 
 # Device type to available actions mapping

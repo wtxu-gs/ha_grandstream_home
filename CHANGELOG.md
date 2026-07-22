@@ -1,4 +1,9 @@
 # CHANGELOG
+## v1.0.2
+
+### Added
+
+- Support GDS373X
 
 ## v1.0.1
 
