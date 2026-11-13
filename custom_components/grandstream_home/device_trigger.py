@@ -11,27 +11,35 @@ import voluptuous as vol
 from homeassistant.components.device_automation import DEVICE_TRIGGER_BASE_SCHEMA
 from homeassistant.const import CONF_DEVICE_ID, CONF_DOMAIN, CONF_PLATFORM, CONF_TYPE
 from homeassistant.core import CALLBACK_TYPE, Context, Event, HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, selector
 from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 from homeassistant.helpers.typing import ConfigType
 
 from .automation_patterns import (
+    DI_STATE_ACTIVE,
+    DI_STATE_ANY,
+    DI_STATE_INACTIVE,
+    DI_STATE_OPTIONS,
     GDS_ONLY_TRIGGER_TYPES,
     GDS_TRIGGER_TYPES,
     GNS_TRIGGER_TYPES,
     GSC_TRIGGER_TYPES,
+    HIDDEN_TRIGGER_TYPES,
     TRIGGER_TYPES,
     AutomationConditionChecker,
     AutomationTypeClassifier,
     EntityMatcher,
     IndexCalculator,
+    parse_di_report,
 )
 from .const import (
+    BIZ_EVENT_NAME,
     DEFAULT_DEVICE_FEATURES,
     DEVICE_FEATURES,
     DEVICE_TYPE_GDS,
     DEVICE_TYPE_GNS_NAS,
     DEVICE_TYPE_GSC,
+    DI_ACTIVE_LEVEL,
     DOMAIN,
 )
 from .utils import DeviceMatcher, DeviceTypeResolver, extract_mac_from_name
@@ -41,6 +49,14 @@ _LOGGER = logging.getLogger(__name__)
 # Additional configuration constants
 CONF_THRESHOLD = "threshold"
 CONF_INDEX = "index"
+CONF_DI_STATE = "di_state"
+
+# UI labels for the digital input state selector
+DI_STATE_LABELS = {
+    DI_STATE_ACTIVE: "Active (alarm triggered / door open signal)",
+    DI_STATE_INACTIVE: "Inactive (alarm cleared)",
+    DI_STATE_ANY: "Any state change",
+}
 
 
 # Trigger schema
@@ -49,6 +65,7 @@ TRIGGER_SCHEMA = DEVICE_TRIGGER_BASE_SCHEMA.extend(
         vol.Required(CONF_TYPE): vol.In(TRIGGER_TYPES),
         vol.Optional(CONF_THRESHOLD): vol.Coerce(float),
         vol.Optional(CONF_INDEX): vol.Coerce(int),
+        vol.Optional(CONF_DI_STATE): vol.In(DI_STATE_LABELS),
     }
 )
 
@@ -113,12 +130,38 @@ async def async_get_triggers(
     has_password_unlock = features.get("has_password_unlock", False)
     has_face_recognition = features.get("has_face_recognition", False)
     has_admin_auth_failure_alarm = features.get("has_admin_auth_failure_alarm", False)
+    has_doorbell_key = features.get("has_doorbell_key", False)
+    has_admin_key = features.get("has_admin_key", False)
+    has_quick_key = features.get("has_quick_key", False)
 
     # Remove triggers not supported by device
     triggers_to_remove = []
 
     if not has_di_3:
-        triggers_to_remove.append("di_3")
+        triggers_to_remove.extend(
+            [
+                "di_3_alarm",
+                "di_3_open_signal",
+                "di_3_door_sensor",
+                "di_3_doorbell",
+            ]
+        )
+
+    if not has_doorbell_key:
+        triggers_to_remove.append("doorbell_pressed")
+
+    if not has_admin_key:
+        triggers_to_remove.append("admin_key_pressed")
+
+    if not has_quick_key:
+        triggers_to_remove.extend(
+            [
+                "quick_key_1_pressed",
+                "quick_key_2_pressed",
+                "quick_key_3_pressed",
+                "quick_key_4_pressed",
+            ]
+        )
 
     if not has_qr_code_unlock:
         triggers_to_remove.extend(["door_opened_qrcode", "door_opened_guest_qrcode"])
@@ -195,6 +238,7 @@ async def async_get_triggers(
             CONF_TYPE: trigger_type,
         }
         for trigger_type in valid_triggers
+        if trigger_type not in HIDDEN_TRIGGER_TYPES
     ]
 
 
@@ -304,6 +348,21 @@ def _get_expected_mac(hass: HomeAssistant, device_id: str) -> str | None:
         expected_mac,
     )
     return expected_mac
+
+
+def _get_expected_entry_id(hass: HomeAssistant, device_id: str) -> str | None:
+    """Get the config entry owning the device.
+
+    Args:
+        hass: Home Assistant instance
+        device_id: Device identifier
+
+    Returns:
+        Config entry ID or None if the device is not registered
+
+    """
+    device = DeviceMatcher(hass).get_device_by_id(device_id)
+    return device.config_entry_id if device else None
 
 
 def _validate_event_mac(
@@ -575,6 +634,162 @@ async def _attach_gds_event_trigger(
     return hass.bus.async_listen("grandstream_alarm", handle_gds_alarm_event)
 
 
+def _build_biz_trigger_data(
+    device_id: str,
+    trigger_type: str,
+    event_data: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build trigger data dictionary for biz events.
+
+    Args:
+        device_id: Device identifier
+        trigger_type: Trigger type identifier
+        event_data: Event data from the device
+
+    Returns:
+        Formatted trigger data dictionary
+
+    """
+    trigger_data: dict[str, Any] = {
+        "trigger": {
+            "platform": "device",
+            "domain": DOMAIN,
+            "device_id": device_id,
+            "type": trigger_type,
+            "description": TRIGGER_TYPES[trigger_type],
+            "biz_type": event_data.get("bizType"),
+            "timestamp": event_data.get("timestamp"),
+            "datetime": event_data.get("datetime"),
+            "detail_map": event_data.get("detailMap", {}),
+        }
+    }
+
+    # Expose the detailMap fields reported for this trigger
+    for field in (
+        "quickKeyId",
+        "diInputId",
+        "diTriggerMode",
+        "diMode",
+        "diEventState",
+        "status",
+        "totalSpace",
+        "usedSpace",
+    ):
+        if field in event_data:
+            trigger_data["trigger"][field] = event_data[field]
+
+    return trigger_data
+
+
+def _di_level_is_active(di_mode: int, level: int) -> bool:
+    """Tell whether a reported level means "active" for the configured mode.
+
+    The door state sensor reports the opposite polarity, where level 1 means the
+    door is closed.
+    """
+    return level == DI_ACTIVE_LEVEL.get(di_mode)
+
+
+def _as_int(value: Any) -> int | None:
+    """Coerce a device reported field to int, returning None when unusable."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _attach_biz_event_trigger(
+    hass: HomeAssistant,
+    config: ConfigType,
+    action: TriggerActionType,
+    device_id: str,
+    trigger_type: str,
+) -> CALLBACK_TYPE:
+    """Attach a trigger for device reported biz events (key presses, digital inputs)."""
+    biz_type = AutomationTypeClassifier.get_biz_type(trigger_type)
+    key_filter = AutomationTypeClassifier.get_biz_key_filter(trigger_type)
+    di_mode = AutomationTypeClassifier.get_biz_di_mode(trigger_type)
+    wanted_state = config.get(CONF_DI_STATE, DI_STATE_ACTIVE)
+
+    # A biz report is attributed to the entry that owns its webhook, MAC is the
+    # fallback for payloads the device sends without that context
+    expected_mac = _get_expected_mac(hass, device_id)
+    expected_entry_id = _get_expected_entry_id(hass, device_id)
+
+    async def handle_biz_event(event: Event) -> None:
+        """Handle biz events reported by the device."""
+        if not event.data:
+            _LOGGER.warning("Received empty event data: %s", event)
+            return
+
+        event_entry_id = event.data.get("config_entry_id")
+        if event_entry_id is not None:
+            if event_entry_id != expected_entry_id:
+                _LOGGER.debug(
+                    "Biz event from entry %s ignored by device %s (entry %s)",
+                    event_entry_id,
+                    device_id,
+                    expected_entry_id,
+                )
+                return
+        elif not _validate_event_mac(event.data, expected_mac):
+            return
+
+        if event.data.get("bizType") != biz_type:
+            return
+
+        if key_filter is not None:
+            key_field, key_value = key_filter
+            if str(event.data.get(key_field)) != key_value:
+                _LOGGER.debug(
+                    "Biz key mismatch for trigger %s: expected %s=%s, got %s",
+                    trigger_type,
+                    key_field,
+                    key_value,
+                    event.data.get(key_field),
+                )
+                return
+
+        is_active: bool | None = None
+        if di_mode is not None:
+            if _as_int(event.data.get("diMode")) != di_mode:
+                return
+
+            di_report = parse_di_report(event.data)
+            if di_report is None:
+                _LOGGER.warning(
+                    "Digital input event without usable diEventState: %s", event.data
+                )
+                return
+
+            is_active = _di_level_is_active(di_mode, di_report[1])
+            if wanted_state == DI_STATE_ACTIVE and not is_active:
+                return
+            if wanted_state == DI_STATE_INACTIVE and is_active:
+                return
+
+        trigger_data = _build_biz_trigger_data(device_id, trigger_type, event.data)
+        if is_active is not None:
+            trigger_data["trigger"]["active"] = is_active
+
+        _LOGGER.debug("Executing biz trigger action with data: %s", trigger_data)
+
+        context = Context()
+        result = action(trigger_data, context=context)
+
+        if result is not None:
+            hass.async_create_task(result)
+
+    _LOGGER.info(
+        "Registered biz trigger: %s -> bizType %s%s",
+        trigger_type,
+        biz_type,
+        f", {key_filter[0]} {key_filter[1]}" if key_filter else "",
+    )
+
+    return hass.bus.async_listen(BIZ_EVENT_NAME, handle_biz_event)
+
+
 async def _attach_sensor_trigger(
     hass: HomeAssistant,
     config: ConfigType,
@@ -719,6 +934,11 @@ async def async_attach_trigger(
         raise ValueError(f"Device not found: {device_id}")
 
     # Check if this is a GDS event-based trigger
+    if AutomationTypeClassifier.is_biz_trigger(trigger_type):
+        return await _attach_biz_event_trigger(
+            hass, config, action, device_id, trigger_type
+        )
+
     if AutomationTypeClassifier.is_gds_event_trigger(trigger_type):
         return await _attach_gds_event_trigger(
             hass, config, action, device_id, trigger_type
@@ -743,9 +963,31 @@ async def async_get_trigger_capabilities(
     trigger_type = config[CONF_TYPE]
     device_id = config.get(CONF_DEVICE_ID)
 
+    # Digital input triggers let the user pick the state direction
+    if AutomationTypeClassifier.is_biz_di_trigger(trigger_type):
+        return {
+            "extra_fields": vol.Schema(
+                {
+                    vol.Optional(CONF_DI_STATE, default=DI_STATE_ACTIVE): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(
+                                    value=value, label=DI_STATE_LABELS[value]
+                                )
+                                for value in DI_STATE_OPTIONS
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            )
+        }
+
     # Check if this is a GDS event-based trigger
-    if AutomationTypeClassifier.is_gds_event_trigger(trigger_type):
-        # GDS event triggers don't require additional configuration
+    if AutomationTypeClassifier.is_gds_event_trigger(
+        trigger_type
+    ) or AutomationTypeClassifier.is_biz_trigger(trigger_type):
+        # Event based triggers don't require additional configuration
         return {}
 
     # Get entity registry for dynamic index calculation

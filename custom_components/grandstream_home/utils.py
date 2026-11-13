@@ -295,7 +295,7 @@ class DeviceMatcher:
         """
         return [
             dev
-            for dev in self._device_registry.devices.values()
+            for dev in self._device_registry.devices
             if any(identifier[0] == DOMAIN for identifier in dev.identifiers)
         ]
 

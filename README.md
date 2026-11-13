@@ -32,6 +32,9 @@ and monitoring of your Grandstream devices directly through Home Assistant.
 - **Camera Integration**: RTSP stream support for compatible devices
 - **Device Actions**: Control devices, custom device automations and services
 - **Automatic Discovery**: Local network automatic device detection (Zeroconf)
+- **Digital Input Monitoring**: DI port states for alarm input, open door signal, door sensor and
+  doorbell call
+- **Event Entities**: Key press events (doorbell key, admin key, quick keys) for automations
 
 ## Installation Methods
 
@@ -145,6 +148,19 @@ If automatic discovery doesn't work properly, you can manually configure devices
   - `busy` - Call in progress
   - `preview` - Call preview
   - `ringing` - Ringing
+
+### Digital Input Sensors (GDS)
+
+- **Digital Input 1/2/3**: Binary sensors reflecting each DI port state; the device class follows
+  the port mode configured on the device
+  - Alarm Signal → Problem / OK
+  - Open Door Signal → Open / Closed
+  - Door Status Signal → Open / Closed
+  - Doorbell Call Signal → Detected / Clear
+
+### Event Entities (GDS/GSC)
+
+- **Key Events**: Doorbell key, admin key and quick key presses are exposed as event entities
 
 ### GNS Sensors
 

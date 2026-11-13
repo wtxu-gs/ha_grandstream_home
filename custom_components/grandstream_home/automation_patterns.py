@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 import re
 from typing import Any
 
 from homeassistant.helpers import entity_registry as er
+
+from .const import (
+    DI_MODE_ALARM,
+    DI_MODE_DOORBELL_CALL,
+    DI_MODE_DOOR_STATE,
+    DI_MODE_OPEN_SIGNAL,
+    DI_TRIGGER_MODE_NORMALLY_CLOSED,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +34,127 @@ GNS_TRIGGER_TYPES = {
 
 GNS_CONDITION_TYPES = GNS_TRIGGER_TYPES
 
+# Biz event triggers: the device reports {"type": "biz", "bizType": N, "detailMap": {...}}
+# Key naming follows the product documentation: GDS3725/26/27/30/32 expose a doorbell
+# key, GDS3726Q exposes four quick keys, GSC356X expose a call button.
+GDS_BIZ_TRIGGER_TYPES = {
+    "doorbell_pressed": "Doorbell Pressed",
+    "admin_key_pressed": "Admin Key Pressed",
+    "quick_key_1_pressed": "Quick Key 1 Pressed",
+    "quick_key_2_pressed": "Quick Key 2 Pressed",
+    "quick_key_3_pressed": "Quick Key 3 Pressed",
+    "quick_key_4_pressed": "Quick Key 4 Pressed",
+    # One trigger per DI port and configured mode, the direction is picked in the UI
+    "di_1_alarm": "Digital Input 1 Alarm Input",
+    "di_1_open_signal": "Digital Input 1 Open Door Signal",
+    "di_1_door_sensor": "Digital Input 1 Door Sensor",
+    "di_1_doorbell": "Digital Input 1 Doorbell Call",
+    "di_2_alarm": "Digital Input 2 Alarm Input",
+    "di_2_open_signal": "Digital Input 2 Open Door Signal",
+    "di_2_door_sensor": "Digital Input 2 Door Sensor",
+    "di_2_doorbell": "Digital Input 2 Doorbell Call",
+    "di_3_alarm": "Digital Input 3 Alarm Input",
+    "di_3_open_signal": "Digital Input 3 Open Door Signal",
+    "di_3_door_sensor": "Digital Input 3 Door Sensor",
+    "di_3_doorbell": "Digital Input 3 Doorbell Call",
+}
+
+GSC_BIZ_TRIGGER_TYPES = {
+    "call_key_pressed": "Call Button Pressed",
+}
+
+# State direction a DI trigger fires on, offered as an extra field in the UI
+DI_STATE_ACTIVE = "active"
+DI_STATE_INACTIVE = "inactive"
+DI_STATE_ANY = "any"
+DI_STATE_OPTIONS = (DI_STATE_ACTIVE, DI_STATE_INACTIVE, DI_STATE_ANY)
+
+# Trigger type -> reported bizType
+BIZ_TYPE_MAPPING = {
+    "doorbell_pressed": "1",
+    "call_key_pressed": "1",
+    "admin_key_pressed": "2",
+    "quick_key_1_pressed": "3",
+    "quick_key_2_pressed": "3",
+    "quick_key_3_pressed": "3",
+    "quick_key_4_pressed": "3",
+    "di_1_alarm": "4",
+    "di_1_open_signal": "4",
+    "di_1_door_sensor": "4",
+    "di_1_doorbell": "4",
+    "di_2_alarm": "4",
+    "di_2_open_signal": "4",
+    "di_2_door_sensor": "4",
+    "di_2_doorbell": "4",
+    "di_3_alarm": "4",
+    "di_3_open_signal": "4",
+    "di_3_door_sensor": "4",
+    "di_3_doorbell": "4",
+}
+
+# Trigger type -> (detailMap field, expected value) for triggers sharing a bizType
+BIZ_KEY_ID_MAPPING = {
+    "quick_key_1_pressed": ("quickKeyId", "1"),
+    "quick_key_2_pressed": ("quickKeyId", "2"),
+    "quick_key_3_pressed": ("quickKeyId", "3"),
+    "quick_key_4_pressed": ("quickKeyId", "4"),
+    **{
+        f"di_{port}_{kind}": ("diInputId", str(port))
+        for port in (1, 2, 3)
+        for kind in ("alarm", "open_signal", "door_sensor", "doorbell")
+    },
+}
+
+# Trigger type -> the DI mode the port must be configured as
+BIZ_DI_MODE_MAPPING = {
+    "di_1_alarm": DI_MODE_ALARM,
+    "di_1_open_signal": DI_MODE_OPEN_SIGNAL,
+    "di_1_door_sensor": DI_MODE_DOOR_STATE,
+    "di_1_doorbell": DI_MODE_DOORBELL_CALL,
+    "di_2_alarm": DI_MODE_ALARM,
+    "di_2_open_signal": DI_MODE_OPEN_SIGNAL,
+    "di_2_door_sensor": DI_MODE_DOOR_STATE,
+    "di_2_doorbell": DI_MODE_DOORBELL_CALL,
+    "di_3_alarm": DI_MODE_ALARM,
+    "di_3_open_signal": DI_MODE_OPEN_SIGNAL,
+    "di_3_door_sensor": DI_MODE_DOOR_STATE,
+    "di_3_doorbell": DI_MODE_DOORBELL_CALL,
+}
+
+BIZ_TRIGGERS = set(BIZ_TYPE_MAPPING)
+
+
+def parse_di_report(fields: Mapping[str, Any]) -> tuple[int, int] | None:
+    """Parse a digital input report into (trigger mode, logical level).
+
+    A normally closed port (diTriggerMode 1) reports level 1 while idle, so its
+    raw diEventState is flipped. Returns None when diEventState is unusable.
+
+    Args:
+        fields: detailMap fields, either nested or exposed at the top level
+
+    Returns:
+        tuple[int, int] | None: (diTriggerMode, logical level) or None
+
+    """
+    try:
+        level = int(fields["diEventState"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    try:
+        trigger_mode = int(fields.get("diTriggerMode") or 0)
+    except (TypeError, ValueError):
+        # An unparsable wiring setting must not mask the reported level
+        trigger_mode = DI_TRIGGER_MODE_NORMALLY_OPEN
+
+    # TEMP: inversion disabled for testing
+    # if trigger_mode == DI_TRIGGER_MODE_NORMALLY_CLOSED:
+    #     level = 1 - level
+
+    return trigger_mode, level
+
+
 # GDS device types (shared with GSC, but some are GDS-only)
 GDS_TRIGGER_TYPES = {
     "personnel_intrusion": "Intrusion/Loitering Alarm",
@@ -36,9 +166,6 @@ GDS_TRIGGER_TYPES = {
     "unauthorized_rfid": "Unauthorized RFID Card/QR Code Access Alarm",
     "abnormal_sound": "Abnormal Sound Alarm",
     "high_temperature": "High Temperature Alarm",
-    "di_1": "Digital Input Alarm 1",
-    "di_2": "Digital Input Alarm 2",
-    "di_3": "Digital Input Alarm 3",
     "sd_card_unavailable": "SD Card Unavailable Alarm",
     "sd_card_formatted": "SD Card Formatted Alarm",
     "safe_room_alarm": "Safe Room Alarm",
@@ -69,6 +196,7 @@ GDS_TRIGGER_TYPES = {
     "admin_auth_failure": "Backend Admin Continuous Authentication Failure Alarm",
     "phone_busy": "Phone Status Busy",
     "phone_ringing": "Phone Status Ringing",
+    **GDS_BIZ_TRIGGER_TYPES,
 }
 
 # GDS-only triggers (not available on GSC cameras)
@@ -78,24 +206,40 @@ GDS_ONLY_TRIGGER_TYPES = {
     "safe_room_alarm": "Safe Room Alarm",
     "door_opened_common_password": "Door Opened by Common Password",
     "keypad_error": "Keypad Multiple Input Errors Alarm",
-    "di_3": "Digital Input Alarm 3",
     "door_opened_face": "Door Opened by Face Recognition",
     "door_opened_password_face": "Door Opened by Password and Face Recognition",
     "door_opened_card_face": "Door Opened by Card and Face Recognition",
     "door_opened_face_password": "Door Opened by Face Recognition and Password",
     "door_opened_face_card": "Door Opened by Face Recognition and Card",
     "admin_auth_failure": "Backend Admin Continuous Authentication Failure Alarm",
+    "doorbell_pressed": "Doorbell Pressed",
+    "admin_key_pressed": "Admin Key Pressed",
+    "quick_key_1_pressed": "Quick Key 1 Pressed",
+    "quick_key_2_pressed": "Quick Key 2 Pressed",
+    "quick_key_3_pressed": "Quick Key 3 Pressed",
+    "quick_key_4_pressed": "Quick Key 4 Pressed",
 }
 
 # GSC specific triggers (only for GSC devices)
 GSC_TRIGGER_TYPES = {
     "power_insufficient": "Power Insufficient Alarm",
+    **GSC_BIZ_TRIGGER_TYPES,
 }
 
 GDS_CONDITION_TYPES: dict[str, str] = {}
 
+# Legacy alarm-event DI triggers kept for backward compatibility but hidden from UI
+HIDDEN_TRIGGER_TYPES = {"di_1", "di_2", "di_3"}
+
 # Combined types for backward compatibility
-TRIGGER_TYPES = {**GNS_TRIGGER_TYPES, **GDS_TRIGGER_TYPES}
+TRIGGER_TYPES = {
+    **GNS_TRIGGER_TYPES,
+    **GDS_TRIGGER_TYPES,
+    **GSC_TRIGGER_TYPES,
+    "di_1": "Digital Input Alarm 1",
+    "di_2": "Digital Input Alarm 2",
+    "di_3": "Digital Input Alarm 3",
+}
 CONDITION_TYPES = {**GNS_CONDITION_TYPES, **GDS_CONDITION_TYPES}
 
 # GDS event code mapping
@@ -852,6 +996,31 @@ class AutomationTypeClassifier:
         return trigger_type in DOOR_ACCESS_TRIGGERS
 
     @classmethod
+    def is_biz_trigger(cls, trigger_type: str) -> bool:
+        """Check if trigger is a biz-event trigger."""
+        return trigger_type in BIZ_TRIGGERS
+
+    @classmethod
+    def get_biz_type(cls, trigger_type: str) -> str | None:
+        """Get the bizType a trigger listens for."""
+        return BIZ_TYPE_MAPPING.get(trigger_type)
+
+    @classmethod
+    def get_biz_key_filter(cls, trigger_type: str) -> tuple[str, str] | None:
+        """Get the (detailMap field, value) a trigger additionally matches on."""
+        return BIZ_KEY_ID_MAPPING.get(trigger_type)
+
+    @classmethod
+    def is_biz_di_trigger(cls, trigger_type: str) -> bool:
+        """Check if trigger is a digital input biz trigger."""
+        return trigger_type in BIZ_DI_MODE_MAPPING
+
+    @classmethod
+    def get_biz_di_mode(cls, trigger_type: str) -> int | None:
+        """Get the DI mode a trigger listens for."""
+        return BIZ_DI_MODE_MAPPING.get(trigger_type)
+
+    @classmethod
     def is_threshold_trigger(cls, trigger_type: str) -> bool:
         """Check if trigger requires a numeric threshold."""
         return trigger_type in THRESHOLD_TYPES
@@ -1024,18 +1193,30 @@ class AutomationConditionChecker:
 
 __all__ = [
     # Type dictionaries
+    "BIZ_DI_MODE_MAPPING",
+    "BIZ_KEY_ID_MAPPING",
+    "BIZ_TRIGGERS",
+    "BIZ_TYPE_MAPPING",
     "CONDITION_TYPES",
     "DEFAULT_CONDITION_THRESHOLDS",
     "DEFAULT_THRESHOLDS",
+    "DI_STATE_ACTIVE",
+    "DI_STATE_ANY",
+    "DI_STATE_INACTIVE",
+    "DI_STATE_OPTIONS",
     "DOOR_ACCESS_TRIGGERS",
     "DOOR_ACCESS_TYPE_MAPPING",
+    "GDS_BIZ_TRIGGER_TYPES",
     "GDS_CONDITION_TYPES",
     "GDS_EVENT_MAPPING",
     "GDS_EVENT_TRIGGERS",
     "GDS_ONLY_TRIGGER_TYPES",
     "GDS_TRIGGER_TYPES",
+    "GSC_BIZ_TRIGGER_TYPES",
+    "GSC_TRIGGER_TYPES",
     "GNS_CONDITION_TYPES",
     "GNS_TRIGGER_TYPES",
+    "HIDDEN_TRIGGER_TYPES",
     "STATUS_CONDITION_TYPES",
     "STATUS_TRIGGER_TYPES",
     "THRESHOLD_TYPES",
@@ -1046,4 +1227,6 @@ __all__ = [
     "EntityMatcher",
     "IndexCalculator",
     "PatternMatcher",
+    # Functions
+    "parse_di_report",
 ]

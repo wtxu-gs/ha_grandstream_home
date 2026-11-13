@@ -12,7 +12,9 @@ from homeassistant.components import webhook
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DEVICE_TYPE_GDS
+from .automation_patterns import parse_di_report
+from .const import BIZ_EVENT_NAME, DEVICE_TYPE_GDS, DI_MODE_DOORBELL_CALL
+from .coordinator import GrandstreamCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +33,22 @@ ALARM_EVENTS = {
     "8": "DI 1",
     "9": "DI 2",
     "10": "DI 3",
+    "21": "Backend Admin Continuous Authentication Failure Alarm",
+}
+
+# Business event types reported with type="biz"
+BIZ_TYPE_SD_CARD = "0"
+BIZ_TYPE_DOORBELL = "1"
+BIZ_TYPE_ADMIN_KEY = "2"
+BIZ_TYPE_QUICK_KEY = "3"
+BIZ_TYPE_DI_STATE = "4"
+
+BIZ_EVENTS = {
+    BIZ_TYPE_SD_CARD: "SD Card Status",
+    BIZ_TYPE_DOORBELL: "Doorbell/Call Key Pressed",
+    BIZ_TYPE_ADMIN_KEY: "Admin Key Pressed",
+    BIZ_TYPE_QUICK_KEY: "Quick Key Pressed",
+    BIZ_TYPE_DI_STATE: "Digital Input State",
 }
 
 
@@ -264,13 +282,148 @@ async def _handle_alarm_event(hass: HomeAssistant, data: dict[str, Any]) -> None
         _LOGGER.exception("Unexpected error handling alarm event")
 
 
+def _update_di_state(
+    coordinator: GrandstreamCoordinator,
+    detail_map: dict[str, Any],
+    event_time: datetime,
+) -> None:
+    """Cache the logical digital input state so binary sensors can reflect it."""
+    port = detail_map.get("diInputId")
+    try:
+        mode = int(detail_map["diMode"])
+    except (KeyError, TypeError, ValueError) as e:
+        _LOGGER.warning("Ignoring incomplete digital input event: %s (%s)", detail_map, e)
+        return
+
+    parsed = parse_di_report(detail_map)
+    if parsed is None:
+        _LOGGER.warning(
+            "Ignoring digital input event without usable diEventState: %s", detail_map
+        )
+        return
+
+    if port is None:
+        _LOGGER.warning("Ignoring digital input event without diInputId: %s", detail_map)
+        return
+
+    trigger_mode, level = parsed
+    coordinator.update_di_state(port, mode, level, event_time, trigger_mode)
+
+
+def _as_int(value: Any) -> int | None:
+    """Parse an int from detailMap values, which may arrive as strings."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _handle_biz_event(
+    hass: HomeAssistant,
+    coordinator: GrandstreamCoordinator | None,
+    data: dict[str, Any],
+) -> int:
+    """Handle business events reported with type="biz".
+
+    Devices wrap each biz event in eventDetails like access/alert events, with
+    bizType and detailMap nested in the element's data; the flat form is also
+    accepted. The detailMap payload is forwarded unchanged and its fields are
+    exposed at the top level so automations can read them without extra nesting.
+
+    Args:
+        hass: Home Assistant instance
+        coordinator: Data update coordinator owning the webhook
+        data: Business event data
+
+    Returns:
+        int: Number of biz events processed
+
+    """
+    event_details = data.get("eventDetails")
+    if isinstance(event_details, list) and event_details:
+        items = [item for item in event_details if isinstance(item, dict)]
+    else:
+        items = [data]
+
+    processed = 0
+    for item in items:
+        # Wrapped payloads nest bizType/detailMap under data, flat ones keep them at top level
+        payload = item.get("data") if isinstance(item.get("data"), dict) else item
+
+        biz_type = payload.get("bizType")
+        if biz_type is None:
+            _LOGGER.warning("Missing 'bizType' in biz event data: %s", item)
+            continue
+
+        biz_type = str(biz_type)
+        detail_map = payload.get("detailMap") or {}
+        if not isinstance(detail_map, dict):
+            _LOGGER.warning("Ignoring non-dict 'detailMap' in biz event data: %s", item)
+            detail_map = {}
+
+        # Devices may report the event time; fall back to the receiving time
+        event_time_ms = item.get("eventTime")
+        if event_time_ms:
+            event_time = datetime.fromtimestamp(int(event_time_ms) / 1000)
+        else:
+            event_time = datetime.now()
+            event_time_ms = int(event_time.timestamp() * 1000)
+
+        event_data = {
+            "type": "biz",
+            "bizType": biz_type,
+            "description": BIZ_EVENTS.get(biz_type, "Unknown Biz Event"),
+            "timestamp": event_time_ms,
+            "datetime": event_time.isoformat(),
+            "event_id": item.get("eventId"),
+            "mac": data.get("mac"),  # Include MAC for device-specific automation matching
+            "config_entry_id": coordinator.entry_id if coordinator else None,
+            "detailMap": detail_map,
+            **detail_map,
+        }
+
+        if biz_type == BIZ_TYPE_DI_STATE and coordinator is not None:
+            _update_di_state(coordinator, detail_map, event_time)
+
+        hass.bus.async_fire(BIZ_EVENT_NAME, event_data)
+        processed += 1
+
+        # A DI configured as doorbell call simulates a doorbell press, so
+        # doorbell automations and the doorbell event entity also react
+        di_report = parse_di_report(detail_map) if biz_type == BIZ_TYPE_DI_STATE else None
+        if (
+            di_report is not None
+            and di_report[1] == 1
+            and _as_int(detail_map.get("diMode")) == DI_MODE_DOORBELL_CALL
+        ):
+            press_data = {
+                **event_data,
+                "bizType": BIZ_TYPE_DOORBELL,
+                "description": BIZ_EVENTS[BIZ_TYPE_DOORBELL],
+            }
+            hass.bus.async_fire(BIZ_EVENT_NAME, press_data)
+            processed += 1
+
+        _LOGGER.info(
+            "Biz event reported: bizType=%s (%s), details=%s",
+            biz_type,
+            BIZ_EVENTS.get(biz_type, "Unknown"),
+            detail_map,
+        )
+
+    return processed
+
+
 async def _handle_command_data(
-    hass: HomeAssistant, data: dict[str, Any]
+    hass: HomeAssistant,
+    coordinator: GrandstreamCoordinator | None,
+    data: dict[str, Any],
 ) -> dict[str, Any]:
     """Handle command data.
 
     Args:
         hass: Home Assistant instance
+        coordinator: Data update coordinator owning the webhook
         data: Command data
 
     Returns:
@@ -291,6 +444,17 @@ async def _handle_command_data(
 
         # Check if this is a new format event (has "type" and "eventDetails")
         event_type = data.get("type")
+
+        # Business events report bizType/detailMap, wrapped in eventDetails or flat
+        if event_type == "biz" or "bizType" in data:
+            processed = await _handle_biz_event(hass, coordinator, data)
+            return {
+                "success": processed > 0,
+                "message": f"Processed {processed} biz event(s)",
+                "code": 200 if processed else 400,
+                "data": {"type": "biz", "processed": processed},
+            }
+
         if event_type and "eventDetails" in data:
             # This is a new format event (access or alert)
             await _handle_alarm_event(hass, data)
@@ -400,15 +564,22 @@ class GsWebhookStatusReceiver:
 class GsWebhookCommandReceiver:
     """Handle Webhook commands."""
 
-    def __init__(self, hass: HomeAssistant, webhook_id: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: GrandstreamCoordinator | None,
+        webhook_id: str,
+    ) -> None:
         """Initialize the webhook command receiver.
 
         Args:
             hass: Home Assistant instance
+            coordinator: Data update coordinator used to cache pushed states
             webhook_id: Webhook ID
 
         """
         self.hass = hass
+        self.coordinator = coordinator
         self.webhook_id = webhook_id
 
     async def async_setup(self) -> None:
@@ -464,7 +635,7 @@ class GsWebhookCommandReceiver:
                     status=400,
                 )
 
-            result = await _handle_command_data(self.hass, data)
+            result = await _handle_command_data(self.hass, self.coordinator, data)
             return web.json_response(result, status=result["code"])
 
         except (ValueError, KeyError, json.JSONDecodeError, RequestException) as e:

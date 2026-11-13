@@ -1,6 +1,7 @@
 """Data update coordinator for Grandstream devices."""
 
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 import json
 import logging
 from typing import Any
@@ -13,11 +14,24 @@ from .const import (
     COORDINATOR_ERROR_THRESHOLD,
     COORDINATOR_UPDATE_INTERVAL,
     DEVICE_TYPE_GNS_NAS,
+    DI_TRIGGER_MODE_NORMALLY_OPEN,
     DOMAIN,
     SIP_STATUS_MAP,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GrandstreamDIState:
+    """Last reported state of a digital input port."""
+
+    mode: int
+    level: int
+    changed_at: datetime
+    # Wiring the port was reported with, kept for diagnostics; level is already
+    # the logical one, inverted for normally closed ports
+    trigger_mode: int = DI_TRIGGER_MODE_NORMALLY_OPEN
 
 
 class GrandstreamCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -50,6 +64,26 @@ class GrandstreamCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry_id = entry.entry_id
         self._error_count = 0
         self._max_errors = COORDINATOR_ERROR_THRESHOLD
+        # Digital input states only arrive through biz events, so they are kept
+        # outside of data, which polling replaces on every update
+        self.di_states: dict[str, GrandstreamDIState] = {}
+
+    def update_di_state(
+        self,
+        port: int | str,
+        mode: int,
+        level: int,
+        changed_at: datetime,
+        trigger_mode: int = DI_TRIGGER_MODE_NORMALLY_OPEN,
+    ) -> None:
+        """Record a digital input state reported by a biz event and notify entities."""
+        self.di_states[str(port)] = GrandstreamDIState(
+            mode=mode,
+            level=level,
+            changed_at=changed_at,
+            trigger_mode=trigger_mode,
+        )
+        self.async_update_listeners()
 
     def _process_status(self, status_data: str | dict) -> str:
         """Process status data and ensure it doesn't exceed maximum length.

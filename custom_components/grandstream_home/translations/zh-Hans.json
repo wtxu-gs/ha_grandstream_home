@@ -120,12 +120,25 @@
         "trigger_type": {
             "abnormal_sound": "异常声音报警",
             "admin_auth_failure": "后台管理员连续认证失败报警",
+            "admin_key_pressed": "管理键被按下",
             "cpu_high_usage": "CPU使用率过高",
             "cpu_temperature_above": "CPU温度超过阈值",
             "cpu_usage_above": "CPU使用率超过阈值",
             "di_1": "数字输入1报警",
+            "di_1_alarm": "数字输入1 报警输入",
+            "di_1_door_sensor": "数字输入1 门磁状态",
+            "di_1_doorbell": "数字输入1 门铃呼叫",
+            "di_1_open_signal": "数字输入1 开门信号",
             "di_2": "数字输入2报警",
+            "di_2_alarm": "数字输入2 报警输入",
+            "di_2_door_sensor": "数字输入2 门磁状态",
+            "di_2_doorbell": "数字输入2 门铃呼叫",
+            "di_2_open_signal": "数字输入2 开门信号",
             "di_3": "数字输入3报警",
+            "di_3_alarm": "数字输入3 报警输入",
+            "di_3_door_sensor": "数字输入3 门磁状态",
+            "di_3_doorbell": "数字输入3 门铃呼叫",
+            "di_3_open_signal": "数字输入3 开门信号",
             "disk_abnormal": "磁盘状态异常",
             "disk_error": "磁盘错误/故障",
             "disk_offline": "磁盘离线",
@@ -154,6 +167,8 @@
             "door_opened_third_party": "第三方开门",
             "door_opened_touch_pass": "Touch Pass开门",
             "door_opened_indoor_unit": "室内机开门",
+            "call_key_pressed": "呼叫键被按下",
+            "doorbell_pressed": "门铃键被按下",
             "fan_abnormal": "风扇状态异常",
             "high_temperature": "高温报警",
             "hostage": "胁迫报警",
@@ -169,6 +184,10 @@
             "pool_full": "存储池已满",
             "pool_usage_above": "存储池使用率超过阈值",
             "power_insufficient": "供电不足报警",
+            "quick_key_1_pressed": "快捷键1被按下",
+            "quick_key_2_pressed": "快捷键2被按下",
+            "quick_key_3_pressed": "快捷键3被按下",
+            "quick_key_4_pressed": "快捷键4被按下",
             "remote_unlock_wrong_password": "远程开门密码错误报警",
             "safe_room_alarm": "安全室报警",
             "sd_card_formatted": "SD卡被格式化",
@@ -180,6 +199,25 @@
         }
     },
     "entity": {
+        "binary_sensor": {
+            "di": {
+                "name": "数字输入{index}"
+            }
+        },
+        "event": {
+            "admin_key": {
+                "name": "管理键"
+            },
+            "call_key": {
+                "name": "呼叫键"
+            },
+            "doorbell": {
+                "name": "门铃键"
+            },
+            "quick_key": {
+                "name": "快捷键{index}"
+            }
+        },
         "button": {
             "reboot": {
                 "name": "重启"

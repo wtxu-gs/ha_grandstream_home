@@ -50,6 +50,37 @@ PRODUCT_GDS3732 = "GDS3732"
 PRODUCT_GSC3560 = "GSC3560"
 PRODUCT_GSC3565 = "GSC3565"
 
+# Bus events fired from device pushes
+BIZ_EVENT_NAME = "grandstream_biz"
+
+# Digital input biz events (bizType 4) carry diInputId + diTriggerMode + diMode
+# + diEventState
+DI_MODE_ALARM = 1  # Alarm input
+DI_MODE_OPEN_SIGNAL = 2  # Open door signal
+DI_MODE_DOOR_STATE = 4  # Door state sensor
+DI_MODE_DOORBELL_CALL = 5  # Doorbell call signal, a momentary press event
+
+# Wiring of the digital input; a normally closed port reports level 1 while
+# idle, so its reported level has to be flipped to get the logical state
+DI_TRIGGER_MODE_NORMALLY_OPEN = 0  # Normally open wiring
+DI_TRIGGER_MODE_NORMALLY_CLOSED = 1  # Normally closed wiring
+
+DI_MODE_NAMES = {
+    DI_MODE_ALARM: "alarm",
+    DI_MODE_OPEN_SIGNAL: "open_signal",
+    DI_MODE_DOOR_STATE: "door_state",
+    DI_MODE_DOORBELL_CALL: "doorbell_call",
+}
+
+# Level that reads as "active" for each mode; the door state sensor reports the
+# opposite polarity, where 1 means the door is closed
+DI_ACTIVE_LEVEL = {
+    DI_MODE_ALARM: 1,
+    DI_MODE_OPEN_SIGNAL: 1,
+    DI_MODE_DOOR_STATE: 0,
+    DI_MODE_DOORBELL_CALL: 1,
+}
+
 # Device Feature Capabilities
 # Each device model has specific features:
 # - door_count: Number of doors/locks supported
@@ -57,7 +88,7 @@ PRODUCT_GSC3565 = "GSC3565"
 # - has_di_3: Whether device has Digital Input 3 (do3)
 # - has_password_unlock: Password unlock support
 # - has_face_recognition: Face recognition support
-# - has_touch_pass: Touch Pass support 
+# - has_touch_pass: Touch Pass support
 # - has_security_mode: Security mode
 # - has_power_alert: Power supply alert
 # - has_qr_code_unlock: QR-code unlock support (GSC3565 supports, GSC3560 does not)
@@ -67,8 +98,16 @@ PRODUCT_GSC3565 = "GSC3565"
 # - has_duress_alarm: Duress password alarm
 # - has_anti_tamper: Anti-tamper alarm
 # - has_person_stay_alarm: Person stay alarm
+# - has_doorbell_key: Doorbell key press, reported as biz event bizType 1
+# - has_admin_key: Admin key press, reported as biz event bizType 2
+# - has_quick_key: Four quick keys, reported as biz event bizType 3 with quickKeyId
+# GSC356X report their call button as bizType 1 too, but expose it through a
+# dedicated GSC trigger, so they carry none of the GDS key flags below.
 DEVICE_FEATURES: dict[str, dict[str, Any]] = {
     PRODUCT_GDS3725: {
+        "has_doorbell_key": True,
+        "has_admin_key": True,
+        "has_quick_key": False,
         "door_count": 2,
         "has_rtsp": True,
         "has_di_3": True,
@@ -86,6 +125,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_person_stay_alarm": True,
     },
     PRODUCT_GDS3726: {
+        "has_doorbell_key": True,
+        "has_admin_key": False,
+        "has_quick_key": False,
         "door_count": 2,
         "has_rtsp": True,
         "has_di_3": True,
@@ -103,6 +145,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_person_stay_alarm": True,
     },
     PRODUCT_GDS3726Q: {
+        "has_doorbell_key": False,
+        "has_admin_key": False,
+        "has_quick_key": True,
         "door_count": 2,
         "has_rtsp": True,
         "has_di_3": True,
@@ -120,6 +165,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_person_stay_alarm": True,
     },
     PRODUCT_GDS3727: {
+        "has_doorbell_key": True,
+        "has_admin_key": False,
+        "has_quick_key": False,
         "door_count": 1,
         "has_rtsp": True,
         "has_di_3": False,
@@ -137,6 +185,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_person_stay_alarm": True,
     },
     PRODUCT_GDS3730: {
+        "has_doorbell_key": True,
+        "has_admin_key": True,
+        "has_quick_key": False,
         "door_count": 2,
         "has_rtsp": True,
         "has_di_3": True,
@@ -155,6 +206,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_admin_auth_failure_alarm": True,
     },
     PRODUCT_GDS3732: {
+        "has_doorbell_key": True,
+        "has_admin_key": True,
+        "has_quick_key": False,
         "door_count": 2,
         "has_rtsp": True,
         "has_di_3": True,
@@ -173,6 +227,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_admin_auth_failure_alarm": True,
     },
     PRODUCT_GSC3560: {
+        "has_doorbell_key": False,
+        "has_admin_key": False,
+        "has_quick_key": False,
         "door_count": 2,
         "has_rtsp": False,
         "has_di_3": False,
@@ -190,6 +247,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
         "has_person_stay_alarm": False,
     },
     PRODUCT_GSC3565: {
+        "has_doorbell_key": False,
+        "has_admin_key": False,
+        "has_quick_key": False,
         "door_count": 2,
         "has_rtsp": False,
         "has_di_3": False,
@@ -210,6 +270,9 @@ DEVICE_FEATURES: dict[str, dict[str, Any]] = {
 
 # Default features for unknown models
 DEFAULT_DEVICE_FEATURES = {
+    "has_doorbell_key": True,
+    "has_admin_key": True,
+    "has_quick_key": False,
     "door_count": 2,
     "has_rtsp": True,
     "has_di_3": True,

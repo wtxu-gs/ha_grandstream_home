@@ -3,9 +3,11 @@
 import asyncio
 import logging
 import socket
+from datetime import datetime
 from typing import Any
 
 from grandstream_home_api import GDSPhoneAPI, GNSNasAPI
+
 from homeassistant.components import webhook
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, Platform
@@ -13,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
+from .automation_patterns import parse_di_report
 from .const import (
     CONF_COMMAND_WEBHOOK_ID,
     CONF_DEVICE_MODEL,
@@ -43,7 +46,14 @@ from .utils import decrypt_password, generate_unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BUTTON, Platform.CAMERA, Platform.LOCK, Platform.SENSOR]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.CAMERA,
+    Platform.EVENT,
+    Platform.LOCK,
+    Platform.SENSOR,
+]
 
 type GrandstreamConfigEntry = ConfigEntry[dict[str, Any]]
 
@@ -335,19 +345,19 @@ async def _handle_existing_device(
     """Check and update existing device if found."""
     device_registry = dr.async_get(hass)
 
-    for dev in device_registry.devices.values():
-        for identifier in dev.identifiers:
-            if identifier[0] == DOMAIN and identifier[1] == unique_id:
-                _LOGGER.info("Found existing device: %s, name: %s", dev.id, dev.name)
+    dev = device_registry.async_get_device(identifiers={(DOMAIN, unique_id)})
+    if dev is None:
+        return
 
-                # Update device attributes
-                device_registry.async_update_device(
-                    dev.id,
-                    name=name,
-                    manufacturer="Grandstream",
-                    model=device_type,
-                )
-                return
+    _LOGGER.info("Found existing device: %s, name: %s", dev.id, dev.name)
+
+    # Update device attributes
+    device_registry.async_update_device(
+        dev.id,
+        name=name,
+        manufacturer="Grandstream",
+        model=device_type,
+    )
 
 
 def _set_device_network_info(
@@ -418,7 +428,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: GrandstreamConfigEntry) 
         # 8. Configure GDS devices
         await _configure_gds_device(hass, api, device_type, entry, ha_url)
 
-        # 9. Update device information from API (for GNS devices)
+        # 9. Initialize digital input states from device snapshot
+        if device_type == DEVICE_TYPE_GDS and api:
+            await _init_di_states(hass, api, coordinator)
+
+        # 10. Update device information from API (for GNS devices)
         discovery_version = entry.data.get(CONF_FIRMWARE_VERSION)
         await _update_device_info_from_api(
             hass, api, device_type, device, discovery_version
@@ -511,6 +525,7 @@ async def _configure_gds_device(
     hass: HomeAssistant, api: Any, device_type: str, entry: ConfigEntry, ha_url: str
 ) -> None:
     """Configure GDS device with webhook URLs."""
+    # GSC door stations are stored with device_type GDS, so they reach this path too
     if device_type != DEVICE_TYPE_GDS or not api:
         return
 
@@ -522,6 +537,38 @@ async def _configure_gds_device(
 
     # Send configuration to device
     await _send_gds_device_config(hass, api, webhook_config, entry)
+
+
+async def _init_di_states(
+    hass: HomeAssistant, api: Any, coordinator: GrandstreamCoordinator
+) -> None:
+    """Populate DI states from the device so sensors start with a real value."""
+    try:
+        result = await hass.async_add_executor_job(api.get_digital_input_status)
+    except Exception:
+        _LOGGER.warning("Failed to fetch initial digital input status", exc_info=True)
+        return
+
+    if not isinstance(result, dict) or result.get("response") != "success":
+        _LOGGER.debug("Digital input status not available: %s", result)
+        return
+
+    now = datetime.now()
+    for port in ("1", "2", "3"):
+        info = result.get(f"diInputId{port}")
+        if not isinstance(info, dict):
+            continue
+        try:
+            mode = int(info["diMode"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        parsed = parse_di_report(info)
+        if parsed is None:
+            continue
+        trigger_mode, level = parsed
+        coordinator.update_di_state(port, mode, level, now, trigger_mode)
+
+    _LOGGER.debug("Digital input states initialized from device snapshot")
 
 
 def _build_webhook_config(
@@ -823,7 +870,7 @@ async def _set_data_receiver(
     hass: HomeAssistant, coordinator: GrandstreamCoordinator, entry: ConfigEntry
 ) -> bool:
     """Set up data receivers for GDS devices - Webhook only."""
-    # Only GDS devices need webhook receivers
+    # GDS and GSC door stations report events through webhooks
     device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_GDS)
     if device_type != DEVICE_TYPE_GDS:
         _LOGGER.debug(
@@ -851,7 +898,9 @@ async def _set_data_receiver(
         )
 
     if command_webhook_id:
-        webhook_cmd_receiver = GsWebhookCommandReceiver(hass, command_webhook_id)
+        webhook_cmd_receiver = GsWebhookCommandReceiver(
+            hass, coordinator, command_webhook_id
+        )
         await webhook_cmd_receiver.async_setup()
         _LOGGER.info("Set up Webhook command receiver: %s", command_webhook_id)
     else:

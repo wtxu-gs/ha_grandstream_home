@@ -120,12 +120,25 @@
         "trigger_type": {
             "abnormal_sound": "Abnormal Sound Alarm",
             "admin_auth_failure": "Backend Admin Continuous Authentication Failure Alarm",
+            "admin_key_pressed": "Admin Key Pressed",
             "cpu_high_usage": "CPU High Usage",
             "cpu_temperature_above": "CPU Temperature Exceeds Threshold",
             "cpu_usage_above": "CPU Usage Exceeds Threshold",
             "di_1": "Digital Input Alarm 1",
+            "di_1_alarm": "Digital Input 1 Alarm Input",
+            "di_1_door_sensor": "Digital Input 1 Door Sensor",
+            "di_1_doorbell": "Digital Input 1 Doorbell Call",
+            "di_1_open_signal": "Digital Input 1 Open Door Signal",
             "di_2": "Digital Input Alarm 2",
+            "di_2_alarm": "Digital Input 2 Alarm Input",
+            "di_2_door_sensor": "Digital Input 2 Door Sensor",
+            "di_2_doorbell": "Digital Input 2 Doorbell Call",
+            "di_2_open_signal": "Digital Input 2 Open Door Signal",
             "di_3": "Digital Input Alarm 3",
+            "di_3_alarm": "Digital Input 3 Alarm Input",
+            "di_3_door_sensor": "Digital Input 3 Door Sensor",
+            "di_3_doorbell": "Digital Input 3 Doorbell Call",
+            "di_3_open_signal": "Digital Input 3 Open Door Signal",
             "disk_abnormal": "Disk Status Abnormal",
             "disk_error": "Disk Error/Failure",
             "disk_offline": "Disk Offline",
@@ -154,6 +167,8 @@
             "door_opened_third_party": "Door Opened by Third Party",
             "door_opened_touch_pass": "Door Opened by Touch Pass",
             "door_opened_indoor_unit": "Door Opened by Indoor Unit",
+            "call_key_pressed": "Call Button Pressed",
+            "doorbell_pressed": "Doorbell Pressed",
             "fan_abnormal": "Fan Status Abnormal",
             "high_temperature": "High Temperature Alarm",
             "hostage": "Duress Alarm",
@@ -169,6 +184,10 @@
             "pool_full": "Storage Pool Full",
             "pool_usage_above": "Storage Pool Usage Exceeds Threshold",
             "power_insufficient": "Power Insufficient Alarm",
+            "quick_key_1_pressed": "Quick Key 1 Pressed",
+            "quick_key_2_pressed": "Quick Key 2 Pressed",
+            "quick_key_3_pressed": "Quick Key 3 Pressed",
+            "quick_key_4_pressed": "Quick Key 4 Pressed",
             "remote_unlock_wrong_password": "Remote Unlock Wrong Password Alarm",
             "safe_room_alarm": "Safe Room Alarm",
             "sd_card_formatted": "SD Card Formatted Alarm",
@@ -180,6 +199,25 @@
         }
     },
     "entity": {
+        "binary_sensor": {
+            "di": {
+                "name": "Digital Input {index}"
+            }
+        },
+        "event": {
+            "admin_key": {
+                "name": "Admin Key"
+            },
+            "call_key": {
+                "name": "Call Button"
+            },
+            "doorbell": {
+                "name": "Doorbell Key"
+            },
+            "quick_key": {
+                "name": "Quick Key {index}"
+            }
+        },
         "button": {
             "reboot": {
                 "name": "Restart"
